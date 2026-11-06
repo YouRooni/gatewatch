@@ -284,6 +284,8 @@ class Manager:
         self.layout.backups.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.layout.backups.chmod(0o700)
         self.layout.config.mkdir(parents=True, exist_ok=True, mode=0o750)
+        self.layout.releases.mkdir(parents=True, exist_ok=True, mode=0o755)
+        self.layout.releases.chmod(0o755)
 
     @contextlib.contextmanager
     def lock(self):

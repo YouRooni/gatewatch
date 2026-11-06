@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1
+
+- Fix installation with a restrictive umask.
+
 ## 1.1.0
 
 - Custom service events through the CLI and HTTP API.

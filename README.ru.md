@@ -29,7 +29,7 @@
 Debian 12+ или Ubuntu 22.04+, Python 3.10+.
 
 ```sh
-git clone --branch v1.1.0 https://github.com/YouRooni/gatewatch.git
+git clone --branch v1.1.1 https://github.com/YouRooni/gatewatch.git
 cd gatewatch
 sudo bash scripts/install.sh hub
 ```
