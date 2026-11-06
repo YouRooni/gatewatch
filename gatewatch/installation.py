@@ -680,6 +680,7 @@ class Manager:
         existing = self.layout.roles()
         if role in existing:
             raise ValueError("Role already installed; use upgrade")
+        packages = packages if packages is not None else self.layout.load_state().get("packages", [])
         user = self.provision()
         target_config = self.layout.config_for(role)
         if config:

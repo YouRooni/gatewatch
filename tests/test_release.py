@@ -17,6 +17,25 @@ from gatewatch.sources.journal import JournalSeekError, JournalSource
 
 
 class ReleaseTest(unittest.TestCase):
+    def test_adding_role_keeps_installed_plugin_packages(self):
+        with tempfile.TemporaryDirectory() as temp:
+            layout = Layout(Path(temp))
+            layout.config.mkdir(parents=True)
+            layout.units.mkdir(parents=True)
+            layout.config_for("hub").write_text("{}")
+            layout.config_for("agent").write_text("{}")
+            (layout.units / "gatewatch-hub.service").write_text("existing")
+            layout.save_state({"version": "1.0.0", "packages": ["custom-adapter==1.2.3"]})
+            manager = Manager(layout, no_start=True)
+            with (
+                patch.object(manager, "provision"),
+                patch.object(manager, "activate"),
+                patch.object(manager, "run", return_value=SimpleNamespace(returncode=1)),
+                patch.object(manager, "build", return_value=Path(temp) / "release") as build,
+            ):
+                manager.install(Path(temp), "agent")
+            build.assert_called_once_with(Path(temp), ["custom-adapter==1.2.3"])
+
     def test_failed_activation_restores_previous_binary_and_units(self):
         with tempfile.TemporaryDirectory() as temp:
             layout = Layout(Path(temp))
