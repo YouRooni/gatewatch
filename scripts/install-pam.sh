@@ -14,7 +14,7 @@ install -d -m 700 /var/backups/gatewatch
 cp -a /etc/pam.d/sshd "/var/backups/gatewatch/sshd.pam.$(date +%s%N)"
 cp -a /etc/gatewatch/agent.secret.json "/var/backups/gatewatch/agent.secret.$(date +%s%N).json"
 if [[ "$mode" == enable ]]; then
-    if ! /usr/sbin/sshd -T | grep -q '^usepam yes$'; then
+    if ! /usr/sbin/sshd -T | grep '^usepam yes$' >/dev/null; then
         echo 'UsePAM must already be enabled. SSH configuration was not changed.' >&2
         exit 1
     fi
