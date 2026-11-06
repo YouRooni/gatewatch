@@ -10,3 +10,5 @@ tmp/
 *.secret.json
 .env
 /agent_diary.md
+
+.ruff_cache/

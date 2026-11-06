@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import ipaddress
 import os
 import socket
@@ -51,7 +52,9 @@ class PasswordCapture:
         secret[:] = b"\0" * len(secret)
 
     def trim(self):
-        while self.pending and (self.pending[0]["expires"] < time.monotonic() or len(self.pending) > self.capacity):
+        while self.pending and (
+            self.pending[0]["expires"] < time.monotonic() or len(self.pending) > self.capacity
+        ):
             self.wipe(self.pending.popleft())
 
     async def reap(self):
@@ -61,6 +64,9 @@ class PasswordCapture:
 
     async def receive(self, reader, writer):
         task = asyncio.current_task()
+        if len(self.clients) >= 32:
+            writer.close()
+            return
         self.clients.add(task)
         try:
             peer = writer.get_extra_info("socket").getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
@@ -70,18 +76,32 @@ class PasswordCapture:
             header = await asyncio.wait_for(reader.readexactly(48), 1)
             magic, *numbers = struct.unpack("!12I", header)
             pids, user_len, host_len, secret_len = numbers[:8], *numbers[8:]
-            if magic != 0x47575031 or pids[0] != peer_pid or user_len > 256 or host_len > 64 or secret_len > 512:
+            if (
+                magic != 0x47575031
+                or pids[0] != peer_pid
+                or user_len > 256
+                or host_len > 64
+                or secret_len > 512
+            ):
                 return
             payload = await asyncio.wait_for(reader.readexactly(user_len + host_len + secret_len), 1)
             user = payload[:user_len].decode("utf-8", errors="replace")
-            host = str(ipaddress.ip_address(payload[user_len:user_len + host_len].decode("ascii")))
-            secret = bytearray(payload[user_len + host_len:])
+            host = str(ipaddress.ip_address(payload[user_len : user_len + host_len].decode("ascii")))
+            secret = bytearray(payload[user_len + host_len :])
             if is_openssh_placeholder(secret):
                 secret[:] = b"\0" * len(secret)
                 return
             captured = pids[2] + pids[3] / 1e9 if pids[2] else time.time()
-            self.pending.append({"pids": set(pids[:2]), "user": user, "host": host, "secret": secret,
-                                 "captured": captured, "expires": time.monotonic() + self.ttl})
+            self.pending.append(
+                {
+                    "pids": set(pids[:2]),
+                    "user": user,
+                    "host": host,
+                    "secret": secret,
+                    "captured": captured,
+                    "expires": time.monotonic() + self.ttl,
+                }
+            )
             self.trim()
             self.changed.set()
         except (asyncio.IncompleteReadError, asyncio.TimeoutError, ValueError, OSError):
@@ -89,7 +109,8 @@ class PasswordCapture:
         finally:
             self.clients.discard(task)
             writer.close()
-            await writer.wait_closed()
+            with contextlib.suppress(OSError):
+                await writer.wait_closed()
 
     async def apply(self, record, event):
         if event.method not in ("password", "keyboard-interactive/pam"):
@@ -105,10 +126,17 @@ class PasswordCapture:
             self.changed.clear()
             self.trim()
             for item in list(self.pending):
-                if pid in item["pids"] and item["user"] == event.user and item["host"] == address and item["captured"] <= event.time <= item["captured"] + self.ttl:
+                if (
+                    pid in item["pids"]
+                    and item["user"] == event.user
+                    and item["host"] == address
+                    and item["captured"] <= event.time <= item["captured"] + self.ttl
+                ):
                     self.pending.remove(item)
                     password = item["secret"].decode("utf-8", errors="replace")
-                    placeholder = is_openssh_placeholder(item["secret"]) or "Failed password for invalid user " in record.get("MESSAGE", "")
+                    placeholder = is_openssh_placeholder(
+                        item["secret"]
+                    ) or "Failed password for invalid user " in record.get("MESSAGE", "")
                     self.wipe(item)
                     if event.kind == "auth.failure" and event.method == "password" and not placeholder:
                         return replace(event, password=password)

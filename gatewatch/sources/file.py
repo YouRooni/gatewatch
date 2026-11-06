@@ -19,37 +19,56 @@ class FileSource:
     async def records(self, cursor):
         saved = json.loads(cursor) if cursor else None
         with open(self.path, "rb") as stream:
-            stat = os.fstat(stream.fileno())
-            inode = f"{stat.st_dev}:{stat.st_ino}"
-            if saved and saved["inode"] == inode and saved["offset"] <= stat.st_size:
+            metadata = os.fstat(stream.fileno())
+            inode = f"{metadata.st_dev}:{metadata.st_ino}"
+            generation = saved.get("generation", "") if saved and saved["inode"] == inode else ""
+            discarding = saved.get("discarding", False) if saved and saved["inode"] == inode else False
+            if saved and saved["inode"] == inode and saved["offset"] <= metadata.st_size:
                 stream.seek(saved["offset"])
             elif not saved:
                 stream.seek(0, os.SEEK_END)
             else:
                 log.warning("Log rotated beyond saved cursor; resuming available file")
+                generation = str(time.time_ns())
             while True:
                 records = []
-                offset = stream.tell()
+                partial = False
                 for _ in range(64):
                     start = stream.tell()
                     line = stream.readline(65537)
                     if not line:
                         break
-                    if not line.endswith(b"\n") and len(line) <= 65536:
-                        stream.seek(start)
-                        break
-                    offset = stream.tell()
-                    if len(line) > 65536:
+                    if discarding:
+                        discarding = not line.endswith(b"\n")
                         continue
-                    event_cursor = hashlib.sha256(f"{inode}:{start}:".encode() + line).hexdigest()
-                    record = {"MESSAGE": line.decode(errors="replace"), "SYSLOG_IDENTIFIER": self.identity,
-                              "__CURSOR": event_cursor, "__REALTIME_TIMESTAMP": str(int(time.time() * 1e6))}
+                    if len(line) > 65536:
+                        discarding = not line.endswith(b"\n")
+                        continue
+                    if not line.endswith(b"\n"):
+                        stream.seek(start)
+                        partial = True
+                        break
+                    identity = f"{inode}:{generation}:{start}:" if generation else f"{inode}:{start}:"
+                    event_cursor = hashlib.sha256(identity.encode() + line).hexdigest()
+                    record = {
+                        "MESSAGE": line.decode(errors="replace"),
+                        "SYSLOG_IDENTIFIER": self.identity,
+                        "__CURSOR": event_cursor,
+                        "__REALTIME_TIMESTAMP": str(int(time.time() * 1e6)),
+                    }
                     records.extend(parse_record(record))
-                if offset != (saved or {}).get("offset") or inode != (saved or {}).get("inode"):
-                    saved = {"inode": inode, "offset": offset}
+                position = {
+                    "inode": inode,
+                    "offset": stream.tell(),
+                    "generation": generation,
+                    "discarding": discarding,
+                }
+                if position != saved:
+                    saved = position
                     yield json.dumps(saved), records
-                if stream.tell() < os.fstat(stream.fileno()).st_size:
-                    await asyncio.sleep(0.05)
+                current_size = os.fstat(stream.fileno()).st_size
+                if stream.tell() < current_size and not partial:
+                    await asyncio.sleep(0)
                     continue
                 try:
                     current = os.stat(self.path)
@@ -57,6 +76,9 @@ class FileSource:
                         return
                     if current.st_size < stream.tell():
                         stream.seek(0)
+                        generation = str(time.time_ns())
+                        discarding = False
+                        continue
                 except FileNotFoundError:
                     pass
                 await asyncio.sleep(self.interval)

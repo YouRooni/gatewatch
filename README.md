@@ -9,7 +9,7 @@ SSH and Fail2ban notifications in Telegram, with a topic per server. Includes pe
 Debian 12+ or Ubuntu 22.04+, Python 3.10+.
 
 ```sh
-git clone https://github.com/YouRooni/gatewatch.git
+git clone --branch v1.0.0 https://github.com/YouRooni/gatewatch.git
 cd gatewatch
 sudo bash scripts/install.sh hub
 ```
@@ -17,6 +17,8 @@ sudo bash scripts/install.sh hub
 The wizard asks for your bot token, group ID and owner ID. Give the bot permission to manage topics.
 
 [Connect nodes and configure HTTPS →](docs/operations.md)
+
+Updates use versioned environments, automatic backups and rollback. [Install and update guide](docs/releases.md).
 
 ## Controls
 

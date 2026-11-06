@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +9,39 @@ from gatewatch.sources.file import FileSource
 
 
 class SourceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_oversized_line_suffix_is_not_parsed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "fail2ban.log"
+            path.write_bytes(b"")
+            source = FileSource({"path": str(path)})
+            stream = source.records(None)
+            cursor, _ = await anext(stream)
+            await stream.aclose()
+            path.write_bytes(b"x" * 65537 + b"[sshd] Ban 203.0.113.41\n[sshd] Ban 203.0.113.42\n")
+            stream = source.records(cursor)
+            _, events = await anext(stream)
+            await stream.aclose()
+            self.assertEqual([event.ip for event in events], ["203.0.113.42"])
+
+    async def test_partial_line_waits_until_newline(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "fail2ban.log"
+            path.write_bytes(b"")
+            source = FileSource({"path": str(path), "poll_seconds": 1})
+            stream = source.records(None)
+            cursor, _ = await anext(stream)
+            await stream.aclose()
+            path.write_bytes(b"[sshd] Ban 203.0.113.42")
+            stream = source.records(cursor)
+            pending = asyncio.create_task(anext(stream))
+            await asyncio.sleep(0.02)
+            self.assertFalse(pending.done())
+            with path.open("ab") as target:
+                target.write(b"\n")
+            _, events = await asyncio.wait_for(pending, 2)
+            await stream.aclose()
+            self.assertEqual(events[0].ip, "203.0.113.42")
+
     async def test_demo_has_stable_ids_and_runs_once(self):
         stream = DemoSource({}).records(None)
         cursor, first = await anext(stream)

@@ -38,8 +38,11 @@ class HTTPTest(unittest.IsolatedAsyncioTestCase):
         self.temp.cleanup()
 
     async def post(self, events, token=None):
-        return await self.client.post("/v1/events", json={"version": 1, "node_id": self.node, "events": events},
-                                      headers={"Authorization": "Bearer " + (token or self.token)})
+        return await self.client.post(
+            "/v1/events",
+            json={"version": 1, "node_id": self.node, "events": events},
+            headers={"Authorization": "Bearer " + (token or self.token)},
+        )
 
     async def test_batch_is_atomic_and_unknown_fields_rejected(self):
         event = Event.new("auth.failure", "1.1.1.1").wire()
@@ -61,15 +64,23 @@ class HTTPTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await response.json(), {"accepted": 1})
         self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM events").fetchone()[0], 1)
         await asyncio.sleep(0.05)
-        pending = self.store.db.execute("SELECT COUNT(*) FROM deliveries d JOIN cards c ON c.id=d.card WHERE d.version<c.version").fetchone()[0]
+        pending = self.store.db.execute(
+            "SELECT COUNT(*) FROM deliveries d JOIN cards c ON c.id=d.card WHERE d.version<c.version"
+        ).fetchone()[0]
         self.assertEqual(pending, 0)
 
     async def test_oversized_batch_and_body(self):
         event = Event.new("auth.failure", "1.1.1.1").wire()
         self.assertEqual((await self.post([event] * 101)).status, 400)
-        response = await self.client.post("/v1/events", data="x" * (129 * 1024), headers={"Authorization": "Bearer " + self.token})
+        response = await self.client.post(
+            "/v1/events", data="x" * (129 * 1024), headers={"Authorization": "Bearer " + self.token}
+        )
         self.assertEqual(response.status, 413)
 
     async def test_protocol_version(self):
-        response = await self.client.post("/v1/events", json={"version": 2, "node_id": self.node, "events": []}, headers={"Authorization": "Bearer " + self.token})
+        response = await self.client.post(
+            "/v1/events",
+            json={"version": 2, "node_id": self.node, "events": []},
+            headers={"Authorization": "Bearer " + self.token},
+        )
         self.assertEqual(response.status, 400)

@@ -20,8 +20,13 @@ def update(directory, month=None):
         fd, name = tempfile.mkstemp(dir=directory, prefix=".download-", suffix=".mmdb")
         try:
             with os.fdopen(fd, "wb") as target:
-                request = urllib.request.Request(url, headers={"User-Agent": "Gatewatch/0.1 (+https://github.com/YouRooni/gatewatch)"})
-                with urllib.request.urlopen(request, timeout=60) as response, gzip.GzipFile(fileobj=response) as source:
+                request = urllib.request.Request(
+                    url, headers={"User-Agent": "Gatewatch/0.1 (+https://github.com/YouRooni/gatewatch)"}
+                )
+                with (
+                    urllib.request.urlopen(request, timeout=60) as response,
+                    gzip.GzipFile(fileobj=response) as source,
+                ):
                     total = 0
                     while chunk := source.read(1024 * 1024):
                         total += len(chunk)

@@ -83,8 +83,8 @@ DB-IP Lite requires attribution. Update monthly and restart the hub. No lookup r
 
 Logs: `journalctl -u gatewatch-hub -f` or `journalctl -u gatewatch-agent -f`.
 
-Back up with `sudo -u gatewatch /opt/gatewatch/bin/gatewatch backup /var/lib/gatewatch/snapshot.db`; store the secret config separately. Before upgrades, preserve the database, config and deployed commit. Stop services, install the new checkout with `/opt/gatewatch/bin/pip install /path/to/checkout`, validate configs and restart.
+Back up with `sudo -u gatewatch /opt/gatewatch/bin/gatewatch backup /var/lib/gatewatch/snapshot.db`; store the secret config separately. Use the [versioned update manager](releases.md) for upgrades and rollback. `gatewatch doctor` checks local database and plugin readiness without sending messages.
 
-Disable services with `systemctl disable --now gatewatch-agent gatewatch-hub gatewatch-demo`. Remove optional integrations first. Keep data/backups until verified; removal never resets SSH or firewall rules automatically.
+Remove services with `sudo /opt/gatewatch/bin/gatewatch-manage uninstall all`. Configs and data are retained; removal never resets firewall rules.
 
 For a synthetic node, create a separate identity and database, use `"sources":{"demo":{"type":"demo"}}` and optionally `"actions":{"type":"demo"}`. Demo actions do not modify the firewall.

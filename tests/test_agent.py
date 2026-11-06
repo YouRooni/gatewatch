@@ -1,5 +1,4 @@
 import asyncio
-import json
 import sqlite3
 import tempfile
 import unittest
@@ -44,7 +43,13 @@ class AgentTest(unittest.IsolatedAsyncioTestCase):
         await server.start_server()
         with tempfile.TemporaryDirectory() as temp:
             database = str(Path(temp) / "agent.db")
-            config = {"database": database, "endpoint": str(server.make_url("/")), "node_id": "fake-node", "token": "fake-token", "sources": {"test": {"type": "test"}}}
+            config = {
+                "database": database,
+                "endpoint": str(server.make_url("/")),
+                "node_id": "fake-node",
+                "token": "fake-token",
+                "sources": {"test": {"type": "test"}},
+            }
             with patch("gatewatch.agent.plugin", return_value=Source):
                 task = asyncio.create_task(run(config))
                 try:

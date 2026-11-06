@@ -6,6 +6,7 @@ class Geo:
         self.city = self.asn = None
         if config.get("city_database") or config.get("asn_database"):
             import geoip2.database
+
             if config.get("city_database"):
                 self.city = geoip2.database.Reader(config["city_database"])
             if config.get("asn_database"):
@@ -18,31 +19,35 @@ class Geo:
         if address in self.cache:
             return self.cache[address][0]
         parts = []
-        country = ''
+        country = ""
         if self.city:
             from geoip2.errors import AddressNotFoundError
+
             try:
                 city = self.city.city(address)
-                country = city.country.iso_code or ''
+                country = city.country.iso_code or ""
                 parts += [part for part in (city.country.name, city.city.name) if part]
             except AddressNotFoundError:
                 pass
         if self.asn:
             from geoip2.errors import AddressNotFoundError
+
             try:
                 asn = self.asn.asn(address)
-                parts.append(f"AS{asn.autonomous_system_number} {asn.autonomous_system_organization or ''}".strip())
+                parts.append(
+                    f"AS{asn.autonomous_system_number} {asn.autonomous_system_organization or ''}".strip()
+                )
             except AddressNotFoundError:
                 pass
         result = " · ".join(parts)[:240]
         if len(self.cache) >= 2048:
             self.cache.pop(next(iter(self.cache)))
-        self.cache[address] = (result,country)
+        self.cache[address] = (result, country)
         return result
 
     def country_code(self, address):
         self.lookup(address)
-        return self.cache.get(address, ('',''))[1]
+        return self.cache.get(address, ("", ""))[1]
 
     def close(self):
         for reader in (self.city, self.asn):

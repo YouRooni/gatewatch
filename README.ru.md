@@ -9,7 +9,7 @@
 Debian 12+ или Ubuntu 22.04+, Python 3.10+.
 
 ```sh
-git clone https://github.com/YouRooni/gatewatch.git
+git clone --branch v1.0.0 https://github.com/YouRooni/gatewatch.git
 cd gatewatch
 sudo bash scripts/install.sh hub
 ```
@@ -17,6 +17,8 @@ sudo bash scripts/install.sh hub
 Мастер запросит токен бота, ID группы и владельца. Боту нужны права на управление темами.
 
 [Подключение нод и настройка HTTPS →](docs/operations.md)
+
+Обновления используют отдельные окружения, автоматические бекапы и откат. [Установка и обновление](docs/releases.md).
 
 ## Управление
 

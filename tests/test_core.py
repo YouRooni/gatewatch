@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from gatewatch.agent import validate_endpoint
-from gatewatch.cli import read_config, write_secret
+from gatewatch.cli import write_secret
 from gatewatch.model import Event
 from gatewatch.render import render
 from gatewatch.sources.journal import parse_record
@@ -32,6 +32,17 @@ class StoreTest(unittest.TestCase):
         with self.store.db:
             self.store.db.execute("UPDATE nodes SET enabled=0")
         self.assertIsNone(self.store.authenticate(self.node, self.token))
+
+    def test_source_failure_and_recovery_are_reported_once(self):
+        self.store.ingest(self.node, [], ["tg"])
+        self.store.health(["tg"], 180)
+        self.store.set_state("agent:" + self.node, {"sources": {"journal": "error"}})
+        self.store.health(["tg"], 180)
+        self.store.health(["tg"], 180)
+        self.store.set_state("agent:" + self.node, {"sources": {"journal": "ok"}})
+        self.store.health(["tg"], 180)
+        kinds = [row[0] for row in self.store.db.execute("SELECT kind FROM cards ORDER BY rowid")]
+        self.assertEqual(kinds, ["node.online", "node.degraded", "node.recovered"])
 
     def test_dedup_survives_restart(self):
         event = self.event()
@@ -88,7 +99,11 @@ class StoreTest(unittest.TestCase):
             self.store.ingest(self.node, [self.event()], ["tg"])
 
     def test_success_and_ban_are_individual_cards(self):
-        events = [self.event(), Event.new("auth.success", "2001:db8::1"), Event.new("access.ban", "2001:db8::1")]
+        events = [
+            self.event(),
+            Event.new("auth.success", "2001:db8::1"),
+            Event.new("access.ban", "2001:db8::1"),
+        ]
         self.store.ingest(self.node, events, ["tg"])
         self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM cards").fetchone()[0], 3)
         self.assertNotEqual(self.store.due("tg")["kind"], "auth.failure")
@@ -122,11 +137,16 @@ class StoreTest(unittest.TestCase):
     def test_agent_batches_respect_byte_limit(self):
         agent = AgentStore(str(Path(self.temp.name) / "large.db"))
         try:
-            events = [Event.new("auth.failure", "203.0.113.42", method="password", password="\U0001f600" * 512) for _ in range(100)]
+            events = [
+                Event.new("auth.failure", "203.0.113.42", method="password", password="\U0001f600" * 512)
+                for _ in range(100)
+            ]
             agent.append("test", "one", events)
             batch = agent.batch()
             self.assertLess(len(batch), 100)
-            self.assertLess(len(json.dumps({"version": 1, "node_id": self.node, "events": batch}).encode()), 128 * 1024)
+            self.assertLess(
+                len(json.dumps({"version": 1, "node_id": self.node, "events": batch}).encode()), 128 * 1024
+            )
             agent.ack(batch)
             self.assertTrue(agent.has_pending())
         finally:
@@ -135,12 +155,22 @@ class StoreTest(unittest.TestCase):
 
 class ParsingTest(unittest.TestCase):
     def record(self, message, identity="sshd"):
-        return {"MESSAGE": message, "SYSLOG_IDENTIFIER": identity,
-                "__CURSOR": "s=test;i=42", "__REALTIME_TIMESTAMP": str(int(time.time() * 1e6))}
+        return {
+            "MESSAGE": message,
+            "SYSLOG_IDENTIFIER": identity,
+            "__CURSOR": "s=test;i=42",
+            "__REALTIME_TIMESTAMP": str(int(time.time() * 1e6)),
+        }
 
     def test_ssh_ipv4_ipv6_and_methods(self):
-        for state, method, address in (("Failed", "password", "198.51.100.1"), ("Accepted", "publickey", "2001:db8::1"), ("Failed", "keyboard-interactive/pam", "::1")):
-            event = parse_record(self.record(f"{state} {method} for invalid user admin from {address} port 4422 ssh2"))[0]
+        for state, method, address in (
+            ("Failed", "password", "198.51.100.1"),
+            ("Accepted", "publickey", "2001:db8::1"),
+            ("Failed", "keyboard-interactive/pam", "::1"),
+        ):
+            event = parse_record(
+                self.record(f"{state} {method} for invalid user admin from {address} port 4422 ssh2")
+            )[0]
             self.assertEqual(event.ip, address)
             self.assertEqual(event.user, "admin")
             self.assertEqual(event.method, method)
@@ -156,26 +186,50 @@ class ParsingTest(unittest.TestCase):
 
     def test_fail2ban_and_unban(self):
         for action in ("Ban", "Unban"):
-            event = parse_record(self.record(f"2026 fail2ban.actions [123]: NOTICE [sshd] {action} 2001:db8::1", "fail2ban-server"))[0]
+            event = parse_record(
+                self.record(
+                    f"2026 fail2ban.actions [123]: NOTICE [sshd] {action} 2001:db8::1", "fail2ban-server"
+                )
+            )[0]
             self.assertEqual(event.kind, "access." + action.lower())
 
     def test_spoofed_unrelated_unit_ignored(self):
-        self.assertEqual(parse_record(self.record("Accepted password for root from 1.1.1.1 port 22", "app")), [])
+        self.assertEqual(
+            parse_record(self.record("Accepted password for root from 1.1.1.1 port 22", "app")), []
+        )
 
     def test_schema_rejects_invalid_and_raw_fields(self):
         event = Event.new("auth.failure", "1.1.1.1").wire()
-        for field, value in (("port", True), ("ip", "not-ip"), ("time", float("nan")), ("user", "x\ny"), ("password", "secret"), ("time", time.time() - 8 * 86400)):
+        for field, value in (
+            ("port", True),
+            ("ip", "not-ip"),
+            ("time", float("nan")),
+            ("user", "x\ny"),
+            ("password", "secret"),
+            ("time", time.time() - 8 * 86400),
+        ):
             with self.subTest(field=field, value=value), self.assertRaises((ValueError, TypeError)):
                 Event.parse({**event, field: value})
 
     def test_endpoint_does_not_leak_tokens_to_http_or_redirects(self):
         self.assertEqual(validate_endpoint("http://127.0.0.1:8787/"), "http://127.0.0.1:8787")
-        for endpoint in ("http://public.example", "https://u:p@public.example", "https://public.example?secret=1", "file:///tmp/a"):
+        for endpoint in (
+            "http://public.example",
+            "https://u:p@public.example",
+            "https://public.example?secret=1",
+            "file:///tmp/a",
+        ):
             with self.assertRaises(ValueError):
                 validate_endpoint(endpoint)
 
     def test_html_escape_and_timezone(self):
-        card = {**Event.new("auth.failure", "1.1.1.1", method="password").wire(), "users": ["<root>&"], "count": 3, "first": time.time(), "last": time.time()}
+        card = {
+            **Event.new("auth.failure", "1.1.1.1", method="password").wire(),
+            "users": ["<root>&"],
+            "count": 3,
+            "first": time.time(),
+            "last": time.time(),
+        }
         body = render({"name": "<Main>"}, card, timezone="Asia/Novosibirsk", custom=True)
         self.assertIn("&lt;root&gt;&amp;", body)
         self.assertIn("5253864872780769235", body)
@@ -184,14 +238,23 @@ class ParsingTest(unittest.TestCase):
         self.assertIn("&lt;Main&gt;", render({"name": "<Main>"}, card, show_node_name=True))
 
     def test_location_uses_custom_flag_with_unicode_fallback(self):
-        from gatewatch.render import render_rich
         from gatewatch.flags import country_flag
-        card = {**Event.new('auth.failure','1.1.1.1').wire(),'users':['root'],'count':1,'first':time.time(),'last':time.time()}
-        body = render_rich({'name':'Node'},card,geo='Indonesia · Jakarta · AS4787 Example',country_code='ID',custom=True)
-        self.assertIn('🇮🇩',body)
-        self.assertIn('<b>Локация:</b>',body)
-        self.assertEqual(country_flag('DE'),'🇩🇪')
-        self.assertIn('5305515672741103725',country_flag('DE',True))
+        from gatewatch.render import render_rich
+
+        card = {
+            **Event.new("auth.failure", "1.1.1.1").wire(),
+            "users": ["root"],
+            "count": 1,
+            "first": time.time(),
+            "last": time.time(),
+        }
+        body = render_rich(
+            {"name": "Node"}, card, geo="Indonesia · Jakarta · AS4787 Example", country_code="ID", custom=True
+        )
+        self.assertIn("🇮🇩", body)
+        self.assertIn("<b>Локация:</b>", body)
+        self.assertEqual(country_flag("DE"), "🇩🇪")
+        self.assertIn("5305515672741103725", country_flag("DE", True))
 
     def test_secret_files_never_overwrite(self):
         with tempfile.TemporaryDirectory() as temp:

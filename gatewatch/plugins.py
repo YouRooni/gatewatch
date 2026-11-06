@@ -1,5 +1,6 @@
+from collections.abc import AsyncIterator
 from importlib.metadata import entry_points
-from typing import AsyncIterator, Protocol
+from typing import Protocol
 
 from .model import Event
 
@@ -26,6 +27,7 @@ def plugin(group, name):
     }
     if (group, name) in builtins:
         import importlib
+
         module, symbol = builtins[group, name]
         return getattr(importlib.import_module(module), symbol)
     found = entry_points().select(group=f"gatewatch.{group}", name=name)

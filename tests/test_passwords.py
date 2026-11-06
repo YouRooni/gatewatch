@@ -9,8 +9,15 @@ from gatewatch.sources.passwords import PasswordCapture
 class PasswordTest(unittest.IsolatedAsyncioTestCase):
     def capture(self, **kwargs):
         capture = PasswordCapture("unused")
-        item = {"pids": {123, 124}, "user": "root", "host": "203.0.113.42", "secret": bytearray(b"test-password"),
-                "expires": time.monotonic() + 30, "captured": time.time(), **kwargs}
+        item = {
+            "pids": {123, 124},
+            "user": "root",
+            "host": "203.0.113.42",
+            "secret": bytearray(b"test-password"),
+            "expires": time.monotonic() + 30,
+            "captured": time.time(),
+            **kwargs,
+        }
         capture.pending.append(item)
         return capture, item
 
@@ -60,7 +67,14 @@ class PasswordTest(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_user_password_is_not_claimed_as_original(self):
         capture, _ = self.capture()
         event = Event.new("auth.failure", "203.0.113.42", user="root", method="password")
-        self.assertIsNone((await capture.apply({"_PID": "123", "MESSAGE": "Failed password for invalid user root from 203.0.113.42"}, event)).password)
+        self.assertIsNone(
+            (
+                await capture.apply(
+                    {"_PID": "123", "MESSAGE": "Failed password for invalid user root from 203.0.113.42"},
+                    event,
+                )
+            ).password
+        )
 
     async def test_success_schema_forbids_password_field(self):
         event = Event.new("auth.success", "203.0.113.42", method="password").wire()
@@ -68,8 +82,15 @@ class PasswordTest(unittest.IsolatedAsyncioTestCase):
             Event.parse({**event, "password": "should-not-leave-agent"})
 
     async def test_html_in_password_is_escaped_and_controls_are_visible(self):
-        card = {**Event.new("auth.failure", "203.0.113.42", user="root", method="password", password="<test>\n\0").wire(),
-                "users": ["root"], "count": 1, "first": time.time(), "last": time.time()}
+        card = {
+            **Event.new(
+                "auth.failure", "203.0.113.42", user="root", method="password", password="<test>\n\0"
+            ).wire(),
+            "users": ["root"],
+            "count": 1,
+            "first": time.time(),
+            "last": time.time(),
+        }
         body = render_rich({"name": "Node"}, card)
         self.assertIn("&lt;test&gt;\\n\\u0000", body)
         self.assertNotIn("<footer>", body)
