@@ -1,4 +1,6 @@
+import ast
 import json
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -40,9 +42,16 @@ def main():
             source, following, ignore=shutil.ignore_patterns(".git", "tmp", ".venv", "__pycache__")
         )
         version = following / "gatewatch/__init__.py"
-        version.write_text(
-            version.read_text(encoding="utf-8").replace('"1.0.0"', '"1.0.1"'), encoding="utf-8"
+        original = version.read_text(encoding="utf-8")
+        current = next(
+            ast.literal_eval(node.value)
+            for node in ast.parse(original).body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets)
         )
+        parts = re.match(r"([0-9]+)\.([0-9]+)\.([0-9]+)", current)
+        following_version = f"{parts[1]}.{parts[2]}.{int(parts[3]) + 1}"
+        version.write_text(original.replace(f'"{current}"', f'"{following_version}"'), encoding="utf-8")
         run("upgrade", "--source", str(following))
         assert Path("/opt/gatewatch").resolve() != previous
         run("rollback")
