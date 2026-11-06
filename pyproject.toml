@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gatewatch"
+version = "0.1.0"
+description = "Server access events, delivered to your notification channels."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "YouRooni", email = "studio.rooni@gmail.com"}]
+dependencies = ["aiohttp>=3.12.14,<4", "tzdata>=2025.2; sys_platform == 'win32'"]
+
+[project.optional-dependencies]
+geo = ["geoip2>=4.8,<6"]
+
+[project.scripts]
+gatewatch = "gatewatch.cli:main"
+
+[project.entry-points."gatewatch.sources"]
+journal = "gatewatch.sources.journal:JournalSource"
+file = "gatewatch.sources.file:FileSource"
+demo = "gatewatch.sources.demo:DemoSource"
+
+[project.entry-points."gatewatch.channels"]
+telegram = "gatewatch.channels.telegram:TelegramChannel"
+
+[tool.setuptools.packages.find]
+include = ["gatewatch*"]
