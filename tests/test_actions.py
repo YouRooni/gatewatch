@@ -151,6 +151,11 @@ class CallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(button['text'],'Разблокировать')
         self.assertTrue(button['callback_data'].startswith('gw:unban:'))
 
+    async def test_other_jail_cannot_offer_ssh_unban(self):
+        menu={'node':self.node['id'],'ip':'203.0.113.42','topic':11,'kind':'access.ban','service':'nginx-http-auth'}
+        markup=self.channel.keyboard('a'*24,menu,self.node)
+        self.assertFalse(any(button['callback_data'].startswith(('gw:ban:','gw:unban:')) for row in markup['inline_keyboard'] for button in row))
+
 
 class ControlPipelineTest(unittest.IsolatedAsyncioTestCase):
     async def test_node_longpoll_executes_once_and_acknowledges(self):

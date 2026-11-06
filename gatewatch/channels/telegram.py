@@ -97,7 +97,7 @@ class TelegramChannel:
             params = dict(chat_id=self.chat, link_preview_options={"is_disabled": True})
             if card.get('ip'):
                 token = hashlib.sha256(f"{self.id}:{node['id']}:{card['id']}".encode()).hexdigest()[:24]
-                menu = {'node':node['id'],'ip':card['ip'],'topic':topic,'kind':card['kind'],'created':time.time()}
+                menu = {'node':node['id'],'ip':card['ip'],'topic':topic,'kind':card['kind'],'service':card.get('service',''),'created':time.time()}
                 self.store.set_state(f'telegram:{self.id}:menu:{token}',menu)
                 params['reply_markup'] = self.keyboard(token,menu,node)
             if self.rich:
@@ -140,7 +140,8 @@ class TelegramChannel:
         buttons = []
         blocked = self.store.state(f"blocked:{node['id']}:{menu['ip']}",{}).get('blocked',menu['kind']=='access.ban')
         action = 'unban' if blocked else 'ban'
-        if action in self.store.control.capabilities(node['id']):
+        targetable = menu.get('service') in ('ssh','sshd','demo') or (menu.get('service') is None and menu['kind'].startswith('auth.'))
+        if targetable and action in self.store.control.capabilities(node['id']):
             if pending:
                 buttons.append({'text':'Выполняется…' if ru else 'Pending…','callback_data':'gw:info:'+pending})
             else:
@@ -199,6 +200,10 @@ class TelegramChannel:
             await answer(('Пауза на час.' if action=='mute' else 'Уведомления включены.') if ru else ('Muted for 1h.' if action=='mute' else 'Notifications resumed.'))
             markup = self.keyboard(token,menu,node)
         else:
+            targetable = menu.get('service') in ('ssh','sshd','demo') or (menu.get('service') is None and menu['kind'].startswith('auth.'))
+            if not targetable:
+                await answer('Для этого jail управление не включено.' if ru else 'Actions are not enabled for this jail.',True)
+                return
             try:
                 job_id = self.store.control.request(node['id'],action,menu['ip'],query['from']['id'],query['id'],self.id,
                                                     {'message':message['message_id'],'topic':menu['topic'],'menu':token})
