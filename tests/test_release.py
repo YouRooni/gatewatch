@@ -42,7 +42,7 @@ class ReleaseTest(unittest.TestCase):
                 self.assertRaises(OSError),
             ):
                 manager.activate(release, ["agent"])
-            self.assertEqual(layout.current.resolve(), old)
+            self.assertEqual(layout.current.resolve(), old.resolve())
             self.assertEqual(unit.read_text(), "old unit")
             self.assertEqual(layout.load_state()["version"], "1.0.0")
 
