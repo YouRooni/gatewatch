@@ -9,6 +9,7 @@ permissions:
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-22.04, ubuntu-24.04, windows-latest]
         python: ['3.10', '3.14']
@@ -35,6 +36,7 @@ jobs:
       - run: pip-audit --skip-editable
   linux-install:
     strategy:
+      fail-fast: false
       matrix:
         image: ['debian:12-slim', 'debian:13-slim', 'ubuntu:22.04', 'ubuntu:24.04']
     runs-on: ubuntu-latest

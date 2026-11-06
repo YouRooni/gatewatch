@@ -335,6 +335,18 @@ class Manager:
 
     def build(self, source, packages=None):
         version = source_version(source)
+        digest = hashlib.sha256()
+        candidates = [Path(source) / name for name in ("pyproject.toml", "constraints.txt")]
+        for name in ("gatewatch", "integrations", "deploy"):
+            candidates.extend(
+                path
+                for path in (Path(source) / name).rglob("*")
+                if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+            )
+        for path in sorted(candidates):
+            if path.exists():
+                digest.update(path.relative_to(source).as_posix().encode() + b"\0" + path.read_bytes())
+        source_digest = digest.hexdigest()
         geo = False
         hub = self.layout.config / "hub.secret.json"
         if hub.exists():
@@ -342,7 +354,9 @@ class Manager:
                 options.get("geo") for options in json.loads(hub.read_text()).get("channels", {}).values()
             )
         profile = hashlib.sha256(
-            json.dumps({"geo": geo, "packages": sorted(packages or [])}, sort_keys=True).encode()
+            json.dumps(
+                {"geo": geo, "packages": sorted(packages or []), "source": source_digest}, sort_keys=True
+            ).encode()
         ).hexdigest()[:10]
         target = self.layout.releases / (version + "-" + profile)
         if target.exists():
@@ -413,7 +427,13 @@ class Manager:
             atomic_write(
                 target / "installed.json",
                 json.dumps(
-                    {"version": version, "complete": True, "schema": 1, "packages": packages or []}
+                    {
+                        "version": version,
+                        "complete": True,
+                        "schema": 1,
+                        "packages": packages or [],
+                        "source_digest": source_digest,
+                    }
                 ).encode(),
                 0o644,
             )
