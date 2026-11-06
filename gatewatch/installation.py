@@ -336,7 +336,7 @@ class Manager:
     def build(self, source, packages=None):
         version = source_version(source)
         digest = hashlib.sha256()
-        candidates = [Path(source) / name for name in ("pyproject.toml", "constraints.txt")]
+        candidates = [Path(source) / name for name in ("pyproject.toml", "constraints.txt", "release.json")]
         for name in ("gatewatch", "integrations", "deploy"):
             candidates.extend(
                 path
