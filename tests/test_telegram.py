@@ -46,6 +46,10 @@ class TelegramTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.channel.call.call_args.args[0], "sendRichMessage")
         html = self.channel.call.call_args.kwargs["rich_message"]["html"]
         self.assertIn("<details><summary>Подробнее", html)
+        primary = html.split('<details>')[0]
+        self.assertIn('<blockquote><b>IP:</b> <code>1.1.1.1</code>', primary)
+        self.assertIn('<b>Логины:</b> <code>root</code>', primary)
+        self.assertTrue(html.startswith('<p>'))
         self.assertNotIn("Main-X", html)
         await self.channel.deliver(self.node, self.card, receipt)
         self.assertEqual(self.channel.call.call_args.args[0], "editMessageText")

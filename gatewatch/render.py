@@ -26,8 +26,8 @@ def password_line(card, language):
     if card.get("password") is None:
         return ""
     label = ("Последний пароль" if card.get("count", 1) > 1 else "Пароль") if language == "ru" else ("Last password" if card.get("count", 1) > 1 else "Password")
-    value = json.dumps(card["password"], ensure_ascii=False)[1:-1]
-    return f"{label}: <code>{escape(value if value else '(empty)')}</code>"
+    value = json.dumps(card["password"], ensure_ascii=False)[1:-1].replace('\x7f', '\\x7f')
+    return f"<b>{label}:</b> <code>{escape(value if value else '(empty)')}</code>"
 
 
 def render(node, card, language="ru", timezone="UTC", custom=False, geo="", attribution="", show_node_name=False, time_display="auto"):
@@ -73,44 +73,50 @@ def render_rich(node, card, language="ru", timezone="UTC", custom=False, geo="",
     kind = card["kind"]
     icon_id, fallback = ICONS[kind]
     icon = f'<tg-emoji emoji-id="{icon_id}">{fallback}</tg-emoji>' if custom else fallback
-    count = f" · {card['count']}" if card.get("count", 1) > 1 else ""
+    count = f" · <code>{card['count']}</code>" if card.get("count", 1) > 1 else ""
     blocks = [f"<p>{icon} <b>{text[kind]}</b>{count}</p>"]
     if show_node_name:
         blocks.append(f"<p><b>{escape(node['name'])}</b></p>")
-    if card.get("ip"):
-        identity = f"<code>{escape(card['ip'])}</code>"
-        users = card.get("users", [])
-        if len(users) == 1 and users[0]:
-            identity += f" · <code>{escape(users[0][:48])}</code>"
-        blocks.append(f"<p>{identity}</p>")
-    if geo:
-        blocks.append(f"<p>{escape(geo.split(' · ')[0])}</p>")
-    details = []
     ru = language == "ru"
+    primary, details = [], []
+
+    def field(label, value):
+        return f"<b>{escape(label)}:</b> <code>{escape(str(value))}</code>"
+
+    if card.get("ip"):
+        primary.append(field("IP", card["ip"]))
     if kind.startswith("auth."):
-        users = ", ".join(escape(user or "?") for user in card.get("users", []))
-        details.append(f"{text['users']}: <code>{users}</code>")
-        details.append(f"{text['method']}: {escape(card.get('method', ''))}")
+        users = ", ".join(user or "?" for user in card.get("users", []))
+        primary.append(field(text['users'], users))
+        primary.append(field(text['method'], card.get('method', '')))
         if password_line(card, language):
-            details.append(password_line(card, language))
-        details.append(("Сервис" if ru else "Service") + f": {escape(card.get('service', 'ssh'))}")
+            primary.append(password_line(card, language))
+        details.append(field("Сервис" if ru else "Service", card.get('service', 'ssh')))
         if card.get("port"):
-            details.append(f"{text['port']}: <code>{card['port']}</code>")
+            details.append(field(text['port'], card['port']))
     elif kind.startswith("access."):
-        details.append(f"{text['source']}: Fail2ban · {escape(card.get('service', ''))}")
-    if geo and " · " in geo:
-        details.append(escape(geo))
+        primary.append(field(text['source'], "Fail2ban · " + card.get('service', '')))
+    if geo:
+        parts = geo.split(' · ')
+        location = ' · '.join(part for part in parts if not part.startswith('AS'))
+        network = ' · '.join(part for part in parts if part.startswith('AS'))
+        if location:
+            primary.append(field("Локация" if ru else "Location", location))
+        if network:
+            primary.append(field("Сеть" if ru else "Network", network))
+    if primary:
+        blocks.append(f"<blockquote>{'<br>'.join(primary)}</blockquote>")
     zone = ZoneInfo(timezone)
     stamp = datetime.fromtimestamp(card["last"], zone).strftime("%d.%m · %H:%M:%S %Z")
     if time_display == "always" or (time_display == "auto" and time.time() - card["last"] > 60):
-        details.append(("Время события" if ru else "Event time") + f": {escape(stamp)}")
+        details.append(field("Время события" if ru else "Event time", stamp))
     if card.get("count", 1) > 1:
         first = datetime.fromtimestamp(card["first"], zone).strftime("%H:%M:%S")
         last = datetime.fromtimestamp(card["last"], zone).strftime("%H:%M:%S")
-        details.append(("Период" if ru else "Period") + f": {first}–{last}")
+        details.append(field("Период" if ru else "Period", f"{first}–{last}"))
     if details:
         summary = "Подробнее" if ru else "Details"
-        blocks.append(f"<details><summary>{summary}</summary><p>{'<br>'.join(details)}</p></details>")
+        blocks.append(f"<details><summary>{summary}</summary><blockquote>{'<br>'.join(details)}</blockquote></details>")
     if geo and attribution == "dbip":
         blocks.append('<footer><a href="https://db-ip.com">DB-IP</a></footer>')
     return "".join(blocks)

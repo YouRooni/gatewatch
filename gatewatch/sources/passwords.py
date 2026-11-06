@@ -10,6 +10,11 @@ from dataclasses import replace
 from pathlib import Path
 
 
+def is_openssh_placeholder(secret):
+    junk = b"\b\n\r\x7fINCORRECT"
+    return bool(secret) and all(value == junk[index % len(junk)] for index, value in enumerate(secret))
+
+
 class PasswordCapture:
     def __init__(self, path, ttl=30, capacity=512):
         self.path = Path(path)
@@ -71,6 +76,9 @@ class PasswordCapture:
             user = payload[:user_len].decode("utf-8", errors="replace")
             host = str(ipaddress.ip_address(payload[user_len:user_len + host_len].decode("ascii")))
             secret = bytearray(payload[user_len + host_len:])
+            if is_openssh_placeholder(secret):
+                secret[:] = b"\0" * len(secret)
+                return
             captured = pids[2] + pids[3] / 1e9 if pids[2] else time.time()
             self.pending.append({"pids": set(pids[:2]), "user": user, "host": host, "secret": secret,
                                  "captured": captured, "expires": time.monotonic() + self.ttl})
@@ -86,6 +94,8 @@ class PasswordCapture:
     async def apply(self, record, event):
         if event.method not in ("password", "keyboard-interactive/pam"):
             return event
+        if "Failed password for invalid user " in record.get("MESSAGE", ""):
+            return event
         try:
             pid = int(record.get("_PID", 0))
             address = str(ipaddress.ip_address(event.ip))
@@ -98,8 +108,9 @@ class PasswordCapture:
                 if pid in item["pids"] and item["user"] == event.user and item["host"] == address and item["captured"] <= event.time <= item["captured"] + self.ttl:
                     self.pending.remove(item)
                     password = item["secret"].decode("utf-8", errors="replace")
+                    placeholder = is_openssh_placeholder(item["secret"]) or "Failed password for invalid user " in record.get("MESSAGE", "")
                     self.wipe(item)
-                    if event.kind == "auth.failure" and event.method == "password":
+                    if event.kind == "auth.failure" and event.method == "password" and not placeholder:
                         return replace(event, password=password)
                     return event
             if attempt == 0:

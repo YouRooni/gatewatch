@@ -51,6 +51,17 @@ class PasswordTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(capture.pending)
         self.assertFalse(any(item["secret"]))
 
+    async def test_openssh_placeholder_is_never_reported(self):
+        capture, item = self.capture(secret=bytearray(b"\b\n\r\x7fINC"))
+        event = Event.new("auth.failure", "203.0.113.42", user="root", method="password")
+        self.assertIsNone((await capture.apply({"_PID": "123"}, event)).password)
+        self.assertFalse(any(item["secret"]))
+
+    async def test_invalid_user_password_is_not_claimed_as_original(self):
+        capture, _ = self.capture()
+        event = Event.new("auth.failure", "203.0.113.42", user="root", method="password")
+        self.assertIsNone((await capture.apply({"_PID": "123", "MESSAGE": "Failed password for invalid user root from 203.0.113.42"}, event)).password)
+
     async def test_success_schema_forbids_password_field(self):
         event = Event.new("auth.success", "203.0.113.42", method="password").wire()
         with self.assertRaises(ValueError):
