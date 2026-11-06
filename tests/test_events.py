@@ -55,12 +55,16 @@ class ServiceEventTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             database = str(Path(temp) / "agent.db")
             config = {"role": "agent", "database": database}
+            existing = AgentStore(database)
+            existing.append("emit", "source-cursor", [])
+            existing.db.close()
             args = parser().parse_args(["emit", "Backup complete", "--service", "backup", "--id", "a" * 32])
             with patch("gatewatch.cli.read_config", return_value=config), patch("builtins.print"):
                 dispatch(args)
                 dispatch(args)
             store = AgentStore(database)
             self.assertEqual(len(store.batch()), 1)
+            self.assertEqual(store.cursor("emit"), "source-cursor")
             self.assertEqual(store.batch()[0]["title"], "Backup complete")
             self.assertEqual(
                 json.loads(store.db.execute("SELECT payload FROM queue").fetchone()[0])["ip"], ""

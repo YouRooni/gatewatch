@@ -281,7 +281,8 @@ class AgentStore:
                     "INSERT OR IGNORE INTO queue VALUES(?,?,?)",
                     (event.id, json.dumps(event.wire()), time.time()),
                 )
-            self.db.execute("INSERT OR REPLACE INTO cursors VALUES(?,?)", (source, cursor))
+            if source is not None:
+                self.db.execute("INSERT OR REPLACE INTO cursors VALUES(?,?)", (source, cursor))
 
     def batch(self, max_bytes=120 * 1024):
         events, size = [], 0

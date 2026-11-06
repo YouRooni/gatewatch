@@ -143,7 +143,7 @@ def dispatch(args):
         event = Event.parse(event.wire())
         store = AgentStore(config["database"], config.get("queue_limit", 50000))
         try:
-            store.append("emit", event.id, [event])
+            store.append(None, None, [event])
         finally:
             store.db.close()
         print(f"Queued: {event.id}")
