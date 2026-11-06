@@ -18,9 +18,10 @@ class Event:
     port: int = 0
     service: str = "ssh"
     detail: str = ""
+    password: str | None = None
 
     def wire(self):
-        return asdict(self)
+        return {key: value for key, value in asdict(self).items() if value is not None}
 
     @classmethod
     def parse(cls, data):
@@ -42,6 +43,8 @@ class Event:
             value = getattr(event, key)
             if not isinstance(value, str) or len(value) > limit or any(ord(c) < 32 for c in value):
                 raise ValueError(f"Invalid {key}")
+        if event.password is not None and (event.kind != "auth.failure" or event.method != "password" or not isinstance(event.password, str) or len(event.password) > 512):
+            raise ValueError("Password capture is limited to failed password authentication")
         return event
 
     @classmethod

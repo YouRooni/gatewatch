@@ -90,9 +90,9 @@ class TelegramChannel:
             renderer = render_rich if self.rich else render
             body = renderer(node, card, self.lang, self.config.get("timezone", "UTC"), self.custom,
                           self.geo.lookup(card.get("ip")), self.config.get("geo", {}).get("attribution", ""),
-                          self.config.get("show_node_name", False))
+                          self.config.get("show_node_name", False), self.config.get("time_display", "auto"))
             method = "editMessageText" if receipt else "sendRichMessage" if self.rich else "sendMessage"
-            params = dict(chat_id=self.chat)
+            params = dict(chat_id=self.chat, link_preview_options={"is_disabled": True})
             if self.rich:
                 params["rich_message"] = {"html": body, "skip_entity_detection": True}
             else:
@@ -129,7 +129,7 @@ class TelegramChannel:
         raise TelegramError("Delivery retry exhausted")
 
     async def reply(self, message, text):
-        params = dict(chat_id=self.chat, text=text, parse_mode="HTML", disable_notification=True)
+        params = dict(chat_id=self.chat, text=text, parse_mode="HTML", disable_notification=True, link_preview_options={"is_disabled": True})
         if message.get("message_thread_id"):
             params["message_thread_id"] = message["message_thread_id"]
         return await self.call("sendMessage", **params)

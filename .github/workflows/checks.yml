@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     container: debian:12-slim
     steps:
-      - run: apt-get update -qq && apt-get install -y git python3 python3-venv ca-certificates
+      - run: apt-get update -qq && apt-get install -y git python3 python3-venv ca-certificates gcc libpam0g-dev
       - uses: actions/checkout@v4
       - run: python3 -m venv /tmp/venv && /tmp/venv/bin/pip install . && /tmp/venv/bin/python -m unittest discover -s tests -v
+      - run: /tmp/venv/bin/python scripts/check_pam.py

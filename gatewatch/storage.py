@@ -103,6 +103,8 @@ class HubStore:
                 row = self.db.execute("SELECT payload FROM cards WHERE id=?", (key,)).fetchone()
                 if row:
                     payload = json.loads(row[0])
+                    if event.time >= payload["last"]:
+                        payload["password"] = event.password
                     payload["count"] += 1
                     payload["first"] = min(payload["first"], event.time)
                     payload["last"] = max(payload["last"], event.time)
@@ -159,6 +161,7 @@ class HubStore:
 class AgentStore:
     def __init__(self, path, limit=50000):
         self.db = connect(path)
+        self.db.execute("PRAGMA secure_delete=ON")
         self.limit = limit
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS queue(id TEXT PRIMARY KEY,payload TEXT NOT NULL,created REAL NOT NULL);

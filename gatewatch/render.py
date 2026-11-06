@@ -1,5 +1,7 @@
 from datetime import datetime
 from html import escape
+import json
+import time
 from zoneinfo import ZoneInfo
 
 ICONS = {
@@ -20,7 +22,15 @@ TEXT = {
 }
 
 
-def render(node, card, language="ru", timezone="UTC", custom=False, geo="", attribution="", show_node_name=False):
+def password_line(card, language):
+    if card.get("password") is None:
+        return ""
+    label = ("Последний пароль" if card.get("count", 1) > 1 else "Пароль") if language == "ru" else ("Last password" if card.get("count", 1) > 1 else "Password")
+    value = json.dumps(card["password"], ensure_ascii=False)[1:-1]
+    return f"{label}: <code>{escape(value if value else '(empty)')}</code>"
+
+
+def render(node, card, language="ru", timezone="UTC", custom=False, geo="", attribution="", show_node_name=False, time_display="auto"):
     text = TEXT[language]
     kind = card["kind"]
     icon_id, fallback = ICONS[kind]
@@ -38,6 +48,8 @@ def render(node, card, language="ru", timezone="UTC", custom=False, geo="", attr
         if card.get("count", 1) > 1:
             lines.append(f"{text['attempts']}: <b>{card['count']}</b>")
         lines.append(f"{text['method']}: {escape(card.get('method', ''))}")
+        if password_line(card, language):
+            lines.append(password_line(card, language))
         if card.get("port"):
             lines.append(f"{text['port']}: <code>{card['port']}</code>")
     elif kind.startswith("access."):
@@ -47,13 +59,16 @@ def render(node, card, language="ru", timezone="UTC", custom=False, geo="", attr
     if card.get("count", 1) > 1:
         first = datetime.fromtimestamp(card["first"], zone).strftime("%H:%M:%S")
         stamp += f" · {first}–{datetime.fromtimestamp(card['last'], zone).strftime('%H:%M:%S')}"
-    lines += ["", f"<i>{escape(stamp)}</i>"]
+    if time_display == "always" or (time_display == "auto" and time.time() - card["last"] > 60):
+        lines += ["", f"<i>{escape(stamp)}</i>"]
+    elif card.get("count", 1) > 1:
+        lines += ["", f"<i>{first}–{datetime.fromtimestamp(card['last'], zone).strftime('%H:%M:%S')}</i>"]
     if geo and attribution == "dbip":
         lines.append('<a href="https://db-ip.com">DB-IP</a>')
     return "\n".join(lines)
 
 
-def render_rich(node, card, language="ru", timezone="UTC", custom=False, geo="", attribution="", show_node_name=False):
+def render_rich(node, card, language="ru", timezone="UTC", custom=False, geo="", attribution="", show_node_name=False, time_display="auto"):
     text = TEXT[language]
     kind = card["kind"]
     icon_id, fallback = ICONS[kind]
@@ -76,6 +91,8 @@ def render_rich(node, card, language="ru", timezone="UTC", custom=False, geo="",
         users = ", ".join(escape(user or "?") for user in card.get("users", []))
         details.append(f"{text['users']}: <code>{users}</code>")
         details.append(f"{text['method']}: {escape(card.get('method', ''))}")
+        if password_line(card, language):
+            details.append(password_line(card, language))
         details.append(("Сервис" if ru else "Service") + f": {escape(card.get('service', 'ssh'))}")
         if card.get("port"):
             details.append(f"{text['port']}: <code>{card['port']}</code>")
@@ -85,6 +102,8 @@ def render_rich(node, card, language="ru", timezone="UTC", custom=False, geo="",
         details.append(escape(geo))
     zone = ZoneInfo(timezone)
     stamp = datetime.fromtimestamp(card["last"], zone).strftime("%d.%m · %H:%M:%S %Z")
+    if time_display == "always" or (time_display == "auto" and time.time() - card["last"] > 60):
+        details.append(("Время события" if ru else "Event time") + f": {escape(stamp)}")
     if card.get("count", 1) > 1:
         first = datetime.fromtimestamp(card["first"], zone).strftime("%H:%M:%S")
         last = datetime.fromtimestamp(card["last"], zone).strftime("%H:%M:%S")
@@ -92,6 +111,6 @@ def render_rich(node, card, language="ru", timezone="UTC", custom=False, geo="",
     if details:
         summary = "Подробнее" if ru else "Details"
         blocks.append(f"<details><summary>{summary}</summary><p>{'<br>'.join(details)}</p></details>")
-    credit = ' · <a href="https://db-ip.com">DB-IP</a>' if geo and attribution == "dbip" else ""
-    blocks.append(f"<footer>{escape(stamp)}{credit}</footer>")
+    if geo and attribution == "dbip":
+        blocks.append('<footer><a href="https://db-ip.com">DB-IP</a></footer>')
     return "".join(blocks)

@@ -7,7 +7,8 @@ Gatewatch reports security events. It does not replace SSH hardening, Fail2ban, 
 - The Telegram bot token stays on the hub. Bot commands require both the configured group ID and an explicit owner user ID. Anonymous admin messages are not authorized.
 - Remote ingress requires HTTPS with certificate verification. The default listener is loopback-only. Deploy a TLS reverse proxy; do not put credentials in URLs or proxy logs.
 - Batch size, body size, queues and deduplication records are bounded. An authenticated flood can exhaust shared capacity; use ingress rate limits and isolate hostile tenants in separate hubs.
-- Account names and node names are HTML-escaped. Sources discard raw log messages; attempted passwords are not collected.
+- Account names and node names are HTML-escaped. Sources discard raw log messages. Password capture is off by default; an optional PAM integration can attach attempted passwords to confirmed SSH password failures.
+- With PAM capture enabled, even a mistyped legitimate password may reach the hub and Telegram. Successful credentials are matched and discarded in memory. The C hook always returns PAM_IGNORE and uses nonblocking local IPC; custom PAM stacks require review. Backups and private queues can contain captured failed passwords.
 - SQLite and configs contain personal/network metadata. Protect backups and local files. Linux installer uses an unprivileged system account and systemd filesystem restrictions.
 - The same service user can read node configs on a host running both roles. For stricter tenant isolation, use separate hosts/accounts.
 - Windows file modes do not provide Unix ACL isolation. Use your account's protected workspace for temporary configs.

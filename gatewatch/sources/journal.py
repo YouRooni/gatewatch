@@ -48,6 +48,11 @@ class JournalSource:
         self.config = config
 
     async def records(self, cursor):
+        capture = None
+        if self.config.get("password_capture"):
+            from .passwords import PasswordCapture
+            capture = PasswordCapture(self.config.get("password_socket", "/run/gatewatch/passwords.sock"))
+            await capture.start()
         command = ["journalctl", "--follow", "--output=json", "--no-pager", "--all"]
         if cursor:
             command += ["--after-cursor=" + cursor]
@@ -86,7 +91,10 @@ class JournalSource:
                         if not cursor_pending:
                             pending_since = time.monotonic()
                         cursor_pending = record_cursor
-                        events_pending.extend(parse_record(record))
+                        events = parse_record(record)
+                        if capture:
+                            events = [await capture.apply(record, event) for event in events]
+                        events_pending.extend(events)
                     if len(events_pending) >= 64:
                         yield cursor_pending, events_pending
                         cursor_pending, events_pending = None, []
@@ -109,3 +117,5 @@ class JournalSource:
                     process.kill()
                     await process.wait()
             await stderr
+            if capture:
+                await capture.close()
