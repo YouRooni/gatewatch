@@ -182,7 +182,17 @@ class AgentStore:
             self.db.execute("INSERT OR REPLACE INTO cursors VALUES(?,?)", (source, cursor))
 
     def batch(self):
-        return [json.loads(row[0]) for row in self.db.execute("SELECT payload FROM queue ORDER BY created LIMIT 100")]
+        events, size = [], 0
+        for row in self.db.execute("SELECT payload FROM queue ORDER BY created LIMIT 100"):
+            length = len(row[0].encode("utf-8")) + 1
+            if events and size + length > 120 * 1024:
+                break
+            events.append(json.loads(row[0]))
+            size += length
+        return events
+
+    def has_pending(self):
+        return self.db.execute("SELECT 1 FROM queue LIMIT 1").fetchone() is not None
 
     def ack(self, events):
         with self.db:

@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "YouRooni", email = "studio.rooni@gmail.com"}]
-dependencies = ["aiohttp>=3.12.14,<4", "tzdata>=2025.2; sys_platform == 'win32'"]
+dependencies = ["aiohttp>=3.14.5,<4", "tzdata>=2025.2; sys_platform == 'win32'"]
 
 [project.optional-dependencies]
 geo = ["geoip2>=4.8,<6"]

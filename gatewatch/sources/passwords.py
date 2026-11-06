@@ -71,8 +71,9 @@ class PasswordCapture:
             user = payload[:user_len].decode("utf-8", errors="replace")
             host = str(ipaddress.ip_address(payload[user_len:user_len + host_len].decode("ascii")))
             secret = bytearray(payload[user_len + host_len:])
+            captured = pids[2] + pids[3] / 1e9 if pids[2] else time.time()
             self.pending.append({"pids": set(pids[:2]), "user": user, "host": host, "secret": secret,
-                                 "captured": time.time(), "expires": time.monotonic() + self.ttl})
+                                 "captured": captured, "expires": time.monotonic() + self.ttl})
             self.trim()
             self.changed.set()
         except (asyncio.IncompleteReadError, asyncio.TimeoutError, ValueError, OSError):
@@ -94,7 +95,7 @@ class PasswordCapture:
             self.changed.clear()
             self.trim()
             for item in list(self.pending):
-                if pid in item["pids"] and item["user"] == event.user and item["host"] == address and item["captured"] - 1 <= event.time <= item["captured"] + self.ttl:
+                if pid in item["pids"] and item["user"] == event.user and item["host"] == address and item["captured"] <= event.time <= item["captured"] + self.ttl:
                     self.pending.remove(item)
                     password = item["secret"].decode("utf-8", errors="replace")
                     self.wipe(item)

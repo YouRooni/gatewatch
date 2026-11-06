@@ -119,6 +119,19 @@ class StoreTest(unittest.TestCase):
         finally:
             agent.db.close()
 
+    def test_agent_batches_respect_byte_limit(self):
+        agent = AgentStore(str(Path(self.temp.name) / "large.db"))
+        try:
+            events = [Event.new("auth.failure", "203.0.113.42", method="password", password="\U0001f600" * 512) for _ in range(100)]
+            agent.append("test", "one", events)
+            batch = agent.batch()
+            self.assertLess(len(batch), 100)
+            self.assertLess(len(json.dumps({"version": 1, "node_id": self.node, "events": batch}).encode()), 128 * 1024)
+            agent.ack(batch)
+            self.assertTrue(agent.has_pending())
+        finally:
+            agent.db.close()
+
 
 class ParsingTest(unittest.TestCase):
     def record(self, message, identity="sshd"):

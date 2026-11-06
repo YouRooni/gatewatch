@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 static pid_t parent_pid(pid_t pid) {
@@ -60,6 +61,13 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
         header[index + 1] = htonl((uint32_t)pid);
         pid = parent_pid(pid);
     }
+    struct timespec captured;
+    if (clock_gettime(CLOCK_REALTIME, &captured)) {
+        close(fd);
+        return PAM_IGNORE;
+    }
+    header[3] = htonl((uint32_t)captured.tv_sec);
+    header[4] = htonl((uint32_t)captured.tv_nsec);
     header[9] = htonl((uint32_t)user_len);
     header[10] = htonl((uint32_t)host_len);
     header[11] = htonl((uint32_t)secret_len);

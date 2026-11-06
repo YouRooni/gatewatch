@@ -56,7 +56,7 @@ async def run(config):
                             raise RuntimeError("Invalid acknowledgement")
                     store.ack(batch)
                     delay = 1
-                    if len(batch) == 100:
+                    if store.has_pending():
                         await asyncio.sleep(0.2)
                         continue
                     try:
