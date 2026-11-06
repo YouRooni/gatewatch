@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import getpass
+import ipaddress
 import json
 import logging
 import os
@@ -36,6 +37,10 @@ def read_config(path):
         for key, options in config["channels"].items():
             if not re.fullmatch(r"[a-zA-Z0-9_-]{1,32}", key):
                 raise ValueError("Invalid channel id")
+            if "events" in options:
+                from .hub import DEFAULT_EVENTS
+                if not isinstance(options["events"], list) or any(kind not in DEFAULT_EVENTS | {"auth.success"} for kind in options["events"]):
+                    raise ValueError("Invalid channel events subscription")
             if options["type"] == "telegram":
                 if not re.fullmatch(r"[0-9]+:[a-zA-Z0-9_-]+", options.get("token", "")):
                     raise ValueError("Invalid bot token")
@@ -79,14 +84,17 @@ def parser():
     nodes = sub.add_parser("nodes", help="Manage node identities").add_subparsers(dest="action", required=True)
     add = nodes.add_parser("add")
     add.add_argument("name")
+    add.add_argument("--address", required=True, help="Public node IP for its topic title")
     add.add_argument("--endpoint", required=True)
     add.add_argument("--out", required=True, help="New agent config file; never overwritten")
     nodes.add_parser("list")
-    for action in ("revoke", "remove", "rename", "rotate"):
+    for action in ("revoke", "remove", "rename", "rotate", "address"):
         command = nodes.add_parser(action)
         command.add_argument("id")
         if action == "rename":
             command.add_argument("name")
+        if action == "address":
+            command.add_argument("address")
         if action == "rotate":
             command.add_argument("--endpoint", required=True)
             command.add_argument("--out", required=True)
@@ -151,8 +159,8 @@ def dispatch(args):
     store = HubStore(config["database"])
     try:
         if args.action == "list":
-            for node in store.db.execute("SELECT id,name,enabled,seen FROM nodes ORDER BY name"):
-                print(f"{node['id']}  {'enabled' if node['enabled'] else 'revoked'}  {node['name']}")
+            for node in store.db.execute("SELECT id,name,address,enabled,seen FROM nodes ORDER BY name"):
+                print(f"{node['id']}  {'enabled' if node['enabled'] else 'revoked'}  {node['name']}  {node['address']}")
         elif args.action == "add":
             if not args.name.strip() or len(args.name) > 80 or any(ord(c) < 32 for c in args.name):
                 raise ValueError("Node name must be 1..80 printable characters")
@@ -160,7 +168,8 @@ def dispatch(args):
             validate_endpoint(args.endpoint)
             if Path(args.out).exists():
                 raise FileExistsError(args.out)
-            node_id, token = store.add_node(args.name)
+            address = str(ipaddress.ip_address(args.address))
+            node_id, token = store.add_node(args.name, address)
             try:
                 write_secret(args.out, node_config(node_id, token, args.endpoint))
             except Exception:
@@ -185,6 +194,11 @@ def dispatch(args):
                 with store.db:
                     store.db.execute("UPDATE nodes SET name=? WHERE id=?", (args.name, args.id))
                 print("Node renamed. Telegram topic name preserved.")
+            elif args.action == "address":
+                address = str(ipaddress.ip_address(args.address))
+                with store.db:
+                    store.db.execute("UPDATE nodes SET address=? WHERE id=?", (address, args.id))
+                print("Node address updated. Existing Telegram topic name preserved.")
             elif args.action == "revoke":
                 with store.db:
                     store.db.execute("UPDATE nodes SET enabled=0 WHERE id=?", (args.id,))

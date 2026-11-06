@@ -31,6 +31,16 @@
 
 Кастомные эмодзи требуют соответствующих прав аккаунта/бота Telegram. При явном отказе API канал использует обычные эмодзи. Можно сразу установить `custom_emoji: false`. Иконки Toast заданы в `gatewatch/render.py`.
 
+По умолчанию канал отправляет `auth.failure`, `access.ban`, `access.unban`, `node.online`, `node.offline`. Чтобы включить успешные входы, добавьте поле `events` внутрь канала:
+
+```json
+{"events": ["auth.failure", "auth.success", "access.ban", "access.unban", "node.online", "node.offline"]}
+```
+
+Список полностью задаёт подписку канала. События вне подписки принимаются и хранятся центром, но не отправляются. Изменение подписки действует для новых событий; существующие доставки сохраняются. `show_node_name: true` возвращает название сервера в тело сообщения; по умолчанию оно показано только в теме.
+
+`rich_messages: true` включено по умолчанию: краткая карточка, раскрываемые подробности, время и источник геоданных в footer. `false` возвращает обычный Telegram HTML. При недоступном методе API канал автоматически переходит на обычный HTML.
+
 ## HTTPS через Nginx
 
 Добавьте внутрь существующего HTTPS `server` отдельный маршрут:
@@ -132,6 +142,7 @@ sudo -u gatewatch /opt/gatewatch/bin/gatewatch geo-update
 ```sh
 sudo -u gatewatch /opt/gatewatch/bin/gatewatch nodes list
 sudo -u gatewatch /opt/gatewatch/bin/gatewatch nodes rename UUID 'New name'
+sudo -u gatewatch /opt/gatewatch/bin/gatewatch nodes address UUID 203.0.113.11
 sudo -u gatewatch /opt/gatewatch/bin/gatewatch nodes revoke UUID
 sudo -u gatewatch /opt/gatewatch/bin/gatewatch nodes rotate UUID \
   --endpoint https://watch.example.com --out /var/lib/gatewatch/new.secret.json

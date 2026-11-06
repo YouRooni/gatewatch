@@ -67,6 +67,25 @@ class StoreTest(unittest.TestCase):
         with self.assertRaises(OverflowError):
             self.store.ingest(self.node, [second], ["tg"])
         self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM events").fetchone()[0], 1)
+        self.store.ingest(self.node, [first], ["tg"])
+
+    def test_subscription_filters_success_and_can_enable_it(self):
+        event = Event.new("auth.success", "203.0.113.42")
+        self.store.ingest(self.node, [event], {"quiet": {"auth.failure"}, "audit": {"auth.success"}})
+        self.assertIsNone(self.store.due("quiet"))
+        self.assertIsNotNone(self.store.due("audit"))
+
+    def test_services_do_not_merge(self):
+        self.store.ingest(self.node, [self.event(service="ssh"), self.event(service="vpn")], ["tg"])
+        self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM cards").fetchone()[0], 2)
+
+    def test_dedup_at_record_capacity_is_still_acknowledged(self):
+        self.store.max_events = 1
+        event = self.event()
+        self.store.ingest(self.node, [event], ["tg"])
+        self.store.ingest(self.node, [event], ["tg"])
+        with self.assertRaises(OverflowError):
+            self.store.ingest(self.node, [self.event()], ["tg"])
 
     def test_success_and_ban_are_individual_cards(self):
         events = [self.event(), Event.new("auth.success", "2001:db8::1"), Event.new("access.ban", "2001:db8::1")]
@@ -148,6 +167,8 @@ class ParsingTest(unittest.TestCase):
         self.assertIn("&lt;root&gt;&amp;", body)
         self.assertIn("5253864872780769235", body)
         self.assertNotIn("<Main>", body)
+        self.assertNotIn("&lt;Main&gt;", body)
+        self.assertIn("&lt;Main&gt;", render({"name": "<Main>"}, card, show_node_name=True))
 
     def test_secret_files_never_overwrite(self):
         with tempfile.TemporaryDirectory() as temp:

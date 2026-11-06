@@ -11,11 +11,13 @@ from .plugins import plugin
 from .storage import HubStore
 
 log = logging.getLogger(__name__)
+DEFAULT_EVENTS = {"auth.failure", "access.ban", "access.unban", "node.online", "node.offline"}
 
 
 def create_app(config, store=None):
     store = store or HubStore(config["database"], config.get("aggregation_seconds", 300), config.get("queue_limit", 100000), config.get("event_limit", 1000000))
     channels = {key: plugin("channels", options["type"])(options, store, key) for key, options in config["channels"].items()}
+    subscriptions = {key: set(options.get("events", DEFAULT_EVENTS)) for key, options in config["channels"].items()}
     wake = {key: asyncio.Event() for key in channels}
     app = web.Application(client_max_size=128 * 1024)
 
@@ -33,7 +35,7 @@ def create_app(config, store=None):
             if not isinstance(batch, list) or len(batch) > 100:
                 raise ValueError("Batch must contain at most 100 events")
             events = [Event.parse(event) for event in batch]
-            store.ingest(data["node_id"], events, channels)
+            store.ingest(data["node_id"], events, subscriptions)
         except (ValueError, TypeError, KeyError):
             raise web.HTTPBadRequest(text="Invalid event batch") from None
         except OverflowError:
@@ -73,7 +75,7 @@ def create_app(config, store=None):
     async def maintain():
         tick = 0
         while True:
-            store.health(channels, config.get("offline_seconds", 180))
+            store.health(subscriptions, config.get("offline_seconds", 180))
             for event in wake.values():
                 event.set()
             if tick % 120 == 0:

@@ -31,7 +31,7 @@ class HubStore:
             CREATE TABLE IF NOT EXISTS nodes(
                 id TEXT PRIMARY KEY, name TEXT NOT NULL, token TEXT UNIQUE NOT NULL,
                 seen REAL DEFAULT 0, health TEXT DEFAULT 'new', muted REAL DEFAULT 0,
-                enabled INTEGER DEFAULT 1);
+                enabled INTEGER DEFAULT 1, address TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, received REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS cards(
                 id TEXT PRIMARY KEY, node TEXT NOT NULL, kind TEXT NOT NULL,
@@ -56,12 +56,15 @@ class HubStore:
             self.db.execute("ALTER TABLE deliveries ADD COLUMN dirty INTEGER DEFAULT 1")
             self.db.execute("UPDATE deliveries SET dirty=0 WHERE version=(SELECT version FROM cards WHERE id=deliveries.card)")
             self.db.commit()
+        if "address" not in {row[1] for row in self.db.execute("PRAGMA table_info(nodes)")}:
+            self.db.execute("ALTER TABLE nodes ADD COLUMN address TEXT NOT NULL DEFAULT ''")
+            self.db.commit()
         self.db.execute("CREATE INDEX IF NOT EXISTS deliveries_dirty ON deliveries(dirty,next_try)")
 
-    def add_node(self, name):
+    def add_node(self, name, address=""):
         node_id, token = str(uuid.uuid4()), secrets.token_urlsafe(32)
         with self.db:
-            self.db.execute("INSERT INTO nodes(id,name,token) VALUES(?,?,?)", (node_id, name, digest(token)))
+            self.db.execute("INSERT INTO nodes(id,name,token,address) VALUES(?,?,?,?)", (node_id, name, digest(token), address))
         return node_id, token
 
     def authenticate(self, node_id, token):
@@ -78,10 +81,16 @@ class HubStore:
 
     def ingest(self, node_id, events, channels):
         now = time.time()
+        candidates = {node_id + ":" + event.id for event in events}
+        known = set()
+        if candidates:
+            marks = ",".join("?" for _ in candidates)
+            known = {row[0] for row in self.db.execute(f"SELECT id FROM events WHERE id IN ({marks})", list(candidates))}
+        new_count = len(candidates - known)
         pending = self.db.execute("SELECT COUNT(*) FROM deliveries WHERE dirty=1").fetchone()[0]
-        if pending >= self.max_pending and events:
+        if pending >= self.max_pending and new_count:
             raise OverflowError("Queue full")
-        if events and self.db.execute("SELECT value FROM counters WHERE key='events'").fetchone()[0] + len(events) > self.max_events:
+        if new_count and self.db.execute("SELECT value FROM counters WHERE key='events'").fetchone()[0] + new_count > self.max_events:
             raise OverflowError("Deduplication capacity reached")
         with self.db:
             self.db.execute("UPDATE nodes SET seen=? WHERE id=?", (now, node_id))
@@ -89,7 +98,8 @@ class HubStore:
                 inserted = self.db.execute("INSERT OR IGNORE INTO events VALUES(?,?)", (node_id + ":" + event.id, now)).rowcount
                 if not inserted:
                     continue
-                key = f"{node_id}:{event.ip}:{int(event.time // self.window)}" if event.kind == "auth.failure" else f"{node_id}:{event.id}"
+                group = hashlib.sha256(json.dumps([event.service, event.ip, int(event.time // self.window)]).encode()).hexdigest()
+                key = f"{node_id}:failure:{group}" if event.kind == "auth.failure" else f"{node_id}:{event.id}"
                 row = self.db.execute("SELECT payload FROM cards WHERE id=?", (key,)).fetchone()
                 if row:
                     payload = json.loads(row[0])
@@ -105,6 +115,8 @@ class HubStore:
         self.db.execute("""INSERT INTO cards VALUES(?,?,?,?,1,?) ON CONFLICT(id) DO UPDATE
                            SET payload=excluded.payload, version=cards.version+1""", (key, node, kind, json.dumps(payload), now))
         for channel in channels:
+            if isinstance(channels, dict) and kind not in channels[channel]:
+                continue
             self.db.execute("INSERT OR IGNORE INTO deliveries(card,channel) VALUES(?,?)", (key, channel))
         self.db.execute("UPDATE deliveries SET dirty=1 WHERE card=?", (key,))
 

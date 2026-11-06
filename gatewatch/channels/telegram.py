@@ -8,7 +8,7 @@ from html import escape
 import aiohttp
 
 from ..enrichment import Geo
-from ..render import render
+from ..render import render, render_rich
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +26,7 @@ class TelegramChannel:
         self.lock = asyncio.Lock()
         self.last_request = 0
         self.custom = config.get("custom_emoji", True)
+        self.rich = config.get("rich_messages", True)
         self.geo = Geo(config.get("geo", {}))
         self.chat = int(config["chat_id"])
         self.owners = set(config["owner_ids"])
@@ -75,7 +76,8 @@ class TelegramChannel:
         key = self.topic_key(node["id"])
         topic = self.store.state(key, {})
         if not topic.get("id"):
-            result = await self.call("createForumTopic", chat_id=self.chat, name=topic.get("name", node["name"])[:128])
+            default_name = node["name"] + (" - " + node["address"] if node.get("address") else "")
+            result = await self.call("createForumTopic", chat_id=self.chat, name=topic.get("name", default_name)[:128])
             topic = {"id": result["message_thread_id"], "name": result["name"]}
             self.store.set_state(key, topic)
         return topic["id"]
@@ -85,10 +87,16 @@ class TelegramChannel:
         if receipt and receipt.get("topic") != topic:
             receipt = None
         for attempt in range(3):
-            body = render(node, card, self.lang, self.config.get("timezone", "UTC"), self.custom,
-                          self.geo.lookup(card.get("ip")), self.config.get("geo", {}).get("attribution", ""))
-            method = "editMessageText" if receipt else "sendMessage"
-            params = dict(chat_id=self.chat, text=body, parse_mode="HTML")
+            renderer = render_rich if self.rich else render
+            body = renderer(node, card, self.lang, self.config.get("timezone", "UTC"), self.custom,
+                          self.geo.lookup(card.get("ip")), self.config.get("geo", {}).get("attribution", ""),
+                          self.config.get("show_node_name", False))
+            method = "editMessageText" if receipt else "sendRichMessage" if self.rich else "sendMessage"
+            params = dict(chat_id=self.chat)
+            if self.rich:
+                params["rich_message"] = {"html": body, "skip_entity_detection": True}
+            else:
+                params.update(text=body, parse_mode="HTML")
             if receipt:
                 params["message_id"] = receipt["message"]
             else:
@@ -102,7 +110,7 @@ class TelegramChannel:
                     return receipt
                 if "message thread not found" in description or "topic_id_invalid" in description:
                     previous = self.store.state(self.topic_key(node["id"]), {})
-                    self.store.set_state(self.topic_key(node["id"]), {"name": previous.get("name", node["name"])})
+                    self.store.set_state(self.topic_key(node["id"]), {"name": previous.get("name", node["name"] + (" - " + node["address"] if node.get("address") else ""))})
                     topic = await self.topic(node)
                     receipt = None
                 elif receipt and ("message to edit not found" in description or "message can't be edited" in description):
@@ -110,6 +118,9 @@ class TelegramChannel:
                 elif self.custom and ("custom emoji" in description or "emoji_id_invalid" in description):
                     self.custom = False
                     log.warning("Custom emoji unavailable; using standard icons")
+                elif self.rich and ("method not found" in description or description == "not found"):
+                    self.rich = False
+                    log.warning("Rich messages unavailable; using standard HTML")
                 elif "topic_closed" in description:
                     error.retry = 300
                     raise

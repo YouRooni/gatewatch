@@ -16,7 +16,7 @@ class TelegramTest(unittest.IsolatedAsyncioTestCase):
         self.store = HubStore(str(Path(self.temp.name) / "hub.db"))
         node, _ = self.store.add_node("Main-X")
         self.node = dict(self.store.db.execute("SELECT * FROM nodes WHERE id=?", (node,)).fetchone())
-        self.channel = TelegramChannel({"token": "123:fake", "chat_id": -100123, "owner_ids": [42]}, self.store, "tg")
+        self.channel = TelegramChannel({"token": "123:fake", "chat_id": -100123, "owner_ids": [42], "rich_messages": False}, self.store, "tg")
         self.store.set_state(self.channel.topic_key(node), {"id": 11, "name": "My custom topic"})
         self.card = {**Event.new("auth.failure", "1.1.1.1").wire(), "users": ["root"], "count": 1, "first": 1, "last": 1}
 
@@ -31,6 +31,25 @@ class TelegramTest(unittest.IsolatedAsyncioTestCase):
         receipt = await self.channel.deliver(self.node, self.card, None)
         self.assertEqual(receipt, {"topic": 22, "message": 50})
         self.assertEqual(self.channel.call.call_args_list[1].kwargs["name"], "My custom topic")
+
+    async def test_new_topic_has_node_name_and_address(self):
+        self.store.set_state(self.channel.topic_key(self.node["id"]), {})
+        self.node["address"] = "203.0.113.10"
+        self.channel.call = AsyncMock(return_value={"message_thread_id": 25, "name": "Main-X - 203.0.113.10"})
+        self.assertEqual(await self.channel.topic(self.node), 25)
+        self.assertEqual(self.channel.call.call_args.kwargs["name"], "Main-X - 203.0.113.10")
+
+    async def test_rich_send_and_edit(self):
+        self.channel.rich = True
+        self.channel.call = AsyncMock(return_value={"message_id": 52})
+        receipt = await self.channel.deliver(self.node, self.card, None)
+        self.assertEqual(self.channel.call.call_args.args[0], "sendRichMessage")
+        html = self.channel.call.call_args.kwargs["rich_message"]["html"]
+        self.assertIn("<details><summary>Подробнее", html)
+        self.assertNotIn("Main-X", html)
+        await self.channel.deliver(self.node, self.card, receipt)
+        self.assertEqual(self.channel.call.call_args.args[0], "editMessageText")
+        self.assertIn("rich_message", self.channel.call.call_args.kwargs)
 
     async def test_closed_topic_not_recreated(self):
         self.channel.call = AsyncMock(side_effect=TelegramError("Bad Request: TOPIC_CLOSED"))
