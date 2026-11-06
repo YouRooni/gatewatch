@@ -14,6 +14,8 @@ def run(*arguments):
 
 
 def main():
+    if Path("/opt/gatewatch").exists() or Path("/etc/gatewatch").exists():
+        raise SystemExit("Use a disposable container without an existing Gatewatch installation")
     source = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory(prefix="gatewatch-install-test-") as temp:
         config = Path(temp) / "agent.secret.json"

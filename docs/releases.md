@@ -18,6 +18,8 @@ sudo python3 gatewatch-install.py install agent \
 
 Update the hub first, then agents. Protocol 1 accepts legacy 0.1.0 agents; features depend on the installed adapters. Configs without `config_version` are treated as version 1. Unknown newer config/database versions are rejected.
 
+Custom service events require hub 1.1+. Rollback to 1.0 is rejected if the database contains these cards; use a matching backup for that downgrade.
+
 ```sh
 sudo /opt/gatewatch/bin/gatewatch-manage status
 sudo /opt/gatewatch/bin/gatewatch-manage upgrade --version 1.0.0

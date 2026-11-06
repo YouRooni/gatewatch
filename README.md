@@ -2,29 +2,39 @@
 
 <a href="README.ru.md"><kbd>Русский</kbd></a>
 
-SSH and Fail2ban notifications in Telegram, with a topic per server. Includes persistent queues, optional ban controls, and pluggable sources and channels.
+Collect infrastructure events and deliver them through pluggable notification channels. Persistent queues, per-node identities, and optional remote actions.
+
+## Notifications
+
+| Provider | Features | Setup |
+| --- | --- | --- |
+| Telegram | Topics per node, grouped alerts, inline controls | [Telegram](docs/channels/telegram.md) |
+
+## Inputs
+
+| Input | Events | Setup |
+| --- | --- | --- |
+| Journal | SSH and Fail2ban | [Journal](docs/sources/journal.md) |
+| File | Fail2ban logs | [File](docs/sources/file.md) |
+| CLI / HTTP | Events from scripts and services | [Custom events](docs/sources/custom.md) |
+
+| Actions | Adapter |
+| --- | --- |
+| Ban / unban | [Fail2ban](docs/actions/fail2ban.md) |
+
+Other channels, sources and actions can be added as [plugins](docs/extensions.md). Independent clients can use the [HTTP protocol](docs/protocol.md).
 
 ## Install
 
 Debian 12+ or Ubuntu 22.04+, Python 3.10+.
 
 ```sh
-git clone --branch v1.0.0 https://github.com/YouRooni/gatewatch.git
+git clone --branch v1.1.0 https://github.com/YouRooni/gatewatch.git
 cd gatewatch
 sudo bash scripts/install.sh hub
 ```
 
-The wizard asks for your bot token, group ID and owner ID. Give the bot permission to manage topics.
-
-[Connect nodes and configure HTTPS →](docs/operations.md)
-
-Updates use versioned environments, automatic backups and rollback. [Install and update guide](docs/releases.md).
-
-## Controls
-
-`/status` · `/node` · `/mute 1h` · `/unmute`
-
-Ban/unban buttons require the optional Fail2ban adapter. Successful sign-ins and password capture are off by default.
+[Connect nodes](docs/operations.md) · [Update / rollback](docs/releases.md) · [Security](SECURITY.md)
 
 ## Development
 
@@ -32,7 +42,5 @@ Ban/unban buttons require the optional Fail2ban adapter. Successful sign-ins and
 python -m pip install -e .
 python -m unittest discover -s tests -q
 ```
-
-[Configuration](docs/operations.md) · [Protocol](docs/protocol.md) · [Extensions](docs/extensions.md) · [Security](SECURITY.md)
 
 MIT · Author: [YouRooni.t.me](https://t.me/YouRooni)

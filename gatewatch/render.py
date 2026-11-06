@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from .flags import country_flag
 
 ICONS = {
+    "event": ("5255813619702049821", "ℹ️"),
     "auth.failure": ("5253864872780769235", "❗️"),
     "auth.success": ("5255813619702049821", "✅"),
     "access.ban": ("5253647062104287098", "🔒"),
@@ -46,6 +47,17 @@ TEXT = {
 }
 TEXT["ru"].update({"node.degraded": "Источник недоступен", "node.recovered": "Сбор событий восстановлен"})
 TEXT["en"].update({"node.degraded": "Source unavailable", "node.recovered": "Event collection restored"})
+
+
+def heading(card, text, custom):
+    kind = card["kind"]
+    icon_id, fallback = ICONS[
+        "auth.failure" if kind == "event" and card.get("level") in ("warning", "error") else kind
+    ]
+    if kind == "event" and card.get("level") == "info":
+        icon_id, fallback = "", "ℹ️"
+    icon = f'<tg-emoji emoji-id="{icon_id}">{fallback}</tg-emoji>' if custom and icon_id else fallback
+    return f"{icon} <b>{escape(card['title'] if kind == 'event' else text[kind])}</b>"
 
 
 def password_line(card, language):
@@ -88,16 +100,20 @@ def render(
 ):
     text = TEXT[language]
     kind = card["kind"]
-    icon_id, fallback = ICONS[kind]
-    icon = f'<tg-emoji emoji-id="{icon_id}">{fallback}</tg-emoji>' if custom else fallback
-    lines = [f"{icon} <b>{text[kind]}</b>"]
+    lines = [heading(card, text, custom)]
     if show_node_name:
         lines.append(f"<b>{escape(node['name'])}</b>")
     if card.get("ip"):
         lines.append(f"<code>{escape(card['ip'])}</code>")
     if geo:
         lines.append((country_flag(country_code, custom) + " " + escape(geo)).strip())
-    if kind.startswith("auth."):
+    if kind == "event":
+        lines.append(
+            f"<b>{'Сервис' if language == 'ru' else 'Service'}:</b> <code>{escape(card['service'])}</code>"
+        )
+        if card.get("detail"):
+            lines.append(f"<blockquote>{escape(card['detail'])}</blockquote>")
+    elif kind.startswith("auth."):
         users = ", ".join(escape(user or "?") for user in card.get("users", []))
         lines += ["", f"{text['users']}: <code>{users}</code>"]
         if card.get("count", 1) > 1:
@@ -137,10 +153,8 @@ def render_rich(
 ):
     text = TEXT[language]
     kind = card["kind"]
-    icon_id, fallback = ICONS[kind]
-    icon = f'<tg-emoji emoji-id="{icon_id}">{fallback}</tg-emoji>' if custom else fallback
     count = f" · <code>{card['count']}</code>" if card.get("count", 1) > 1 else ""
-    blocks = [f"<p>{icon} <b>{text[kind]}</b>{count}</p>"]
+    blocks = [f"<p>{heading(card, text, custom)}{count}</p>"]
     if show_node_name:
         blocks.append(f"<p><b>{escape(node['name'])}</b></p>")
     ru = language == "ru"
@@ -153,7 +167,11 @@ def render_rich(
         primary.append(field("IP", card["ip"]))
     if card.get("sources"):
         primary.append(field("Источники" if ru else "Sources", ", ".join(card["sources"])))
-    if kind.startswith("auth."):
+    if kind == "event":
+        primary.append(field("Сервис" if ru else "Service", card["service"]))
+        if card.get("detail"):
+            primary.append(f"<code>{escape(card['detail'])}</code>")
+    elif kind.startswith("auth."):
         users = ", ".join(user or "?" for user in card.get("users", []))
         primary.append(field(text["users"], users))
         primary.append(field(text["method"], card.get("method", "")))

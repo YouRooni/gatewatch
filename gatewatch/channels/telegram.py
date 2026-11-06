@@ -126,7 +126,7 @@ class TelegramChannel:
             )
             method = "editMessageText" if receipt else "sendRichMessage" if self.rich else "sendMessage"
             params = dict(chat_id=self.chat, link_preview_options={"is_disabled": True})
-            if card.get("ip"):
+            if card.get("ip") and card["kind"] != "event":
                 token = hashlib.sha256(f"{self.id}:{node['id']}:{card['id']}".encode()).hexdigest()[:24]
                 menu = {
                     "node": node["id"],
@@ -145,7 +145,11 @@ class TelegramChannel:
             if receipt:
                 params["message_id"] = receipt["message"]
             else:
-                params.update(message_thread_id=topic, disable_notification=card["kind"] == "auth.failure")
+                params.update(
+                    message_thread_id=topic,
+                    disable_notification=card["kind"] == "auth.failure"
+                    or (card["kind"] == "event" and card.get("level") == "info"),
+                )
             try:
                 result = await self.call(method, **params)
                 return {"topic": topic, "message": result["message_id"]}

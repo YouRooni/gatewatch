@@ -84,3 +84,11 @@ class HTTPTest(unittest.IsolatedAsyncioTestCase):
             headers={"Authorization": "Bearer " + self.token},
         )
         self.assertEqual(response.status, 400)
+
+    async def test_custom_event_without_ip_is_accepted_and_delivered(self):
+        event = Event.new("event", title="Backup complete", service="backup", level="info").wire()
+        response = await self.post([event])
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["accepted"], 1)
+        await asyncio.sleep(0.05)
+        self.assertEqual(self.store.db.execute("SELECT kind FROM cards").fetchone()[0], "event")

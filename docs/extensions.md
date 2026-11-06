@@ -31,7 +31,7 @@ Other runtimes, including Android, can implement the [HTTP protocol](protocol.md
 
 ## Channels
 
-A card contains normalized event fields plus `count`, `first`, `last`, and `users`. Health cards use `node.online`/`node.offline` and omit IP/user fields. Captured failed passwords may appear as `password` and a bounded `passwords` sample list.
+A card contains normalized event fields plus `count`, `first`, `last`, and `users`. Service cards use `event` with title, level and detail. Health cards use `node.online`/`node.offline`/`node.degraded`/`node.recovered` and omit IP/user fields. Captured failed passwords may appear as `password` and a bounded `passwords` sample list.
 
 Receipts are channel-specific. Return a small receipt so later card updates can edit the same notification. Raise on failure; an exception may expose numeric `retry` seconds. Optional async hooks: `start()` and `action_result(job)`. Each channel has a sequential delivery worker.
 
@@ -43,4 +43,4 @@ Jobs contain `id`, `action`, `ip`, `expires`. Core supports `ban` and `unban`; n
 
 Do not build shell commands from job fields. Keep privileges in a restricted helper, as the built-in Fail2ban adapter does. The `demo` adapter performs no firewall operations.
 
-Plugin APIs may evolve before 1.0. Pin compatible versions; plugins run with the host service's permissions.
+Pin compatible Gatewatch/plugin versions; plugins run with the host service's permissions.

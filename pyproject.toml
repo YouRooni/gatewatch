@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gatewatch"
 dynamic = ["version"]
-description = "Server access events, delivered to your notification channels."
+description = "Infrastructure events, delivered through pluggable notification channels."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

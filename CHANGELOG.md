@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0
+
+- Custom service events through the CLI and HTTP API.
+- Provider, source and action documentation split into separate guides.
+- Infrastructure-focused project description and integration tables.
+
 ## 1.0.0
 
 - SSH and Fail2ban events with one Telegram topic per node.

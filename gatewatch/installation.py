@@ -744,13 +744,31 @@ class Manager:
                 raise ValueError("Previous release metadata is unavailable")
             supported = json.loads(metadata.read_text()).get("schema", 0)
         for role in self.layout.roles():
-            database = Path(json.loads(self.layout.config_for(role).read_text())["database"])
+            configuration = json.loads(self.layout.config_for(role).read_text())
+            if (
+                role == "hub"
+                and version_key(previous["version"]) < version_key("1.1.0")
+                and any(
+                    "event" in channel.get("events", [])
+                    for channel in configuration.get("channels", {}).values()
+                )
+            ):
+                raise ValueError("Previous version does not support event subscriptions")
+            database = Path(configuration["database"])
             if database.exists():
                 db = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
                 try:
                     if db.execute("PRAGMA user_version").fetchone()[0] > supported:
                         raise ValueError(
                             "Previous version cannot read this database; restore a matching backup manually"
+                        )
+                    if (
+                        role == "hub"
+                        and version_key(previous["version"]) < version_key("1.1.0")
+                        and db.execute("SELECT 1 FROM cards WHERE kind='event' LIMIT 1").fetchone()
+                    ):
+                        raise ValueError(
+                            "Previous version cannot read service events; restore a matching backup manually"
                         )
                 finally:
                     db.close()

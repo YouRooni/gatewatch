@@ -34,6 +34,13 @@ def parser():
     init.add_argument("--database", default="/var/lib/gatewatch/hub.db")
     sub.add_parser("run", help="Run hub or agent")
     sub.add_parser("check", help="Validate local config without contacting services")
+    emit = sub.add_parser("emit", help="Queue a service event using an agent config")
+    emit.add_argument("title")
+    emit.add_argument("--service", required=True)
+    emit.add_argument("--level", choices=("info", "warning", "error"), default="info")
+    emit.add_argument("--detail", default="")
+    emit.add_argument("--ip", default="")
+    emit.add_argument("--id")
     doctor = sub.add_parser("doctor", help="Check local database, plugins and source files")
     doctor.add_argument("--json", action="store_true")
     sub.add_parser("migrate", help="Apply supported database migrations with a backup")
@@ -120,6 +127,27 @@ def dispatch(args):
         print("Hub config created. Set up HTTPS before connecting remote nodes.")
         return
     config = read_config(args.config)
+    if args.command == "emit":
+        from dataclasses import replace
+
+        from .model import Event
+        from .storage import AgentStore
+
+        if config["role"] != "agent":
+            raise ValueError("emit requires an agent config")
+        event = Event.new(
+            "event", args.ip, service=args.service, title=args.title, level=args.level, detail=args.detail
+        )
+        if args.id:
+            event = replace(event, id=args.id)
+        event = Event.parse(event.wire())
+        store = AgentStore(config["database"], config.get("queue_limit", 50000))
+        try:
+            store.append("emit", event.id, [event])
+        finally:
+            store.db.close()
+        print(f"Queued: {event.id}")
+        return
     if args.command == "prepare-rollback":
         if not args.target.startswith("0.1."):
             raise ValueError("Unsupported legacy rollback target")

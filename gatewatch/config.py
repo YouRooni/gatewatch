@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 CONFIG_VERSION = 1
 DEFAULT_EVENTS = {
+    "event",
     "auth.failure",
     "access.ban",
     "access.unban",

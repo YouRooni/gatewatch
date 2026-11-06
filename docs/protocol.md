@@ -29,17 +29,19 @@ The timestamp above is illustrative; clients must send current Unix seconds in U
 | Field | Constraint |
 | --- | --- |
 | `id` | Required; stable ASCII `[a-zA-Z0-9_-]`, 16–80 characters |
-| `kind` | `auth.failure`, `auth.success`, `access.ban`, `access.unban` |
+| `kind` | `auth.failure`, `auth.success`, `access.ban`, `access.unban`, `event` |
 | `time` | Required; finite numeric Unix timestamp |
-| `ip` | Required; IPv4 or IPv6 |
+| `ip` | IPv4 or IPv6; optional for `event` |
 | `user` | Optional; printable string, at most 128 characters |
 | `method` | Optional; printable string, at most 32 characters |
 | `port` | Optional; integer 0–65535; remote/client port, zero if unknown |
 | `service` | Optional; printable string, at most 64 characters; default `ssh` |
-| `detail` | Reserved optional short metadata, at most 128 characters; not displayed by default |
+| `detail` | Optional printable text; 1024 characters for `event`, otherwise 128 |
+| `title` | Required for `event` only; nonempty printable text, at most 128 characters |
+| `level` | Required for `event` only; `info`, `warning`, `error` |
 | `password` | Optional sensitive string, at most 512 characters; allowed only for `auth.failure` with method `password` |
 
-Never include successful passwords, tokens or raw log messages. The optional `password` field is specifically for intentionally configured failed-password capture; omit it when unavailable. Upgrade the hub first. Unknown event fields are rejected. Core v1 supports these four portable security event types; new types require a protocol/core change, not just a source plugin.
+Never include successful passwords, tokens or raw log messages. The optional `password` field is specifically for intentionally configured failed-password capture; omit it when unavailable. Unknown event fields are rejected. `event` requires hub 1.1+; upgrade the hub first. Authentication-only fields and passwords are rejected on service events. Use a meaningful `service` such as `backup` or `vpn`; include a stable event ID and current timestamp. Other runtimes can implement this protocol without Gatewatch/Python.
 
 Maximum batch: 100 events. Maximum request body: 128 KiB. An empty batch is a heartbeat. Send it every 30 seconds. A valid request refreshes the last-seen time even if all events are duplicates.
 

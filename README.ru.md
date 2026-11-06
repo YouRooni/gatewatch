@@ -2,29 +2,39 @@
 
 <a href="README.md"><kbd>English</kbd></a>
 
-Уведомления SSH и Fail2ban в Telegram, с отдельной темой для каждого сервера. Очередь на диске, опциональные кнопки блокировки, расширяемые источники и каналы.
+Собирает события инфраструктуры и доставляет их через подключаемые каналы уведомлений. Очереди на диске, отдельные ключи нод и опциональные действия.
+
+## Уведомления
+
+| Провайдер | Возможности | Настройка |
+| --- | --- | --- |
+| Telegram | Тема на ноду, группировка событий, inline-кнопки | [Telegram](docs/channels/telegram.md) |
+
+## Источники
+
+| Источник | События | Настройка |
+| --- | --- | --- |
+| Journal | SSH и Fail2ban | [Journal](docs/sources/journal.md) |
+| Файл | Логи Fail2ban | [File](docs/sources/file.md) |
+| CLI / HTTP | События скриптов и сервисов | [Свои события](docs/sources/custom.md) |
+
+| Действия | Адаптер |
+| --- | --- |
+| Бан / разбан | [Fail2ban](docs/actions/fail2ban.md) |
+
+Другие каналы, источники и действия подключаются как [плагины](docs/extensions.md). Свои клиенты могут использовать [HTTP-протокол](docs/protocol.md).
 
 ## Установка
 
 Debian 12+ или Ubuntu 22.04+, Python 3.10+.
 
 ```sh
-git clone --branch v1.0.0 https://github.com/YouRooni/gatewatch.git
+git clone --branch v1.1.0 https://github.com/YouRooni/gatewatch.git
 cd gatewatch
 sudo bash scripts/install.sh hub
 ```
 
-Мастер запросит токен бота, ID группы и владельца. Боту нужны права на управление темами.
-
-[Подключение нод и настройка HTTPS →](docs/operations.md)
-
-Обновления используют отдельные окружения, автоматические бекапы и откат. [Установка и обновление](docs/releases.md).
-
-## Управление
-
-`/status` · `/node` · `/mute 1h` · `/unmute`
-
-Кнопки бана/разбана требуют отдельного адаптера Fail2ban. Уведомления об успешных входах и захват паролей по умолчанию выключены.
+[Подключение нод](docs/operations.md) · [Обновление / откат](docs/releases.md) · [Безопасность](SECURITY.md)
 
 ## Разработка
 
@@ -32,7 +42,5 @@ sudo bash scripts/install.sh hub
 python -m pip install -e .
 python -m unittest discover -s tests -q
 ```
-
-[Настройка](docs/operations.md) · [Протокол](docs/protocol.md) · [Расширения](docs/extensions.md) · [Безопасность](SECURITY.md)
 
 MIT · Author: [YouRooni.t.me](https://t.me/YouRooni)
