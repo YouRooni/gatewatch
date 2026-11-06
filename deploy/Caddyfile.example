@@ -2,7 +2,7 @@ watch.example.com {
     request_body {
         max_size 128KB
     }
-    @gatewatch path /v1/events /healthz
+    @gatewatch path /v1/events /v1/commands /healthz
     reverse_proxy @gatewatch 127.0.0.1:8787
     respond 404
 }

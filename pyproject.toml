@@ -26,5 +26,9 @@ demo = "gatewatch.sources.demo:DemoSource"
 [project.entry-points."gatewatch.channels"]
 telegram = "gatewatch.channels.telegram:TelegramChannel"
 
+[project.entry-points."gatewatch.actions"]
+fail2ban = "gatewatch.actions.fail2ban:Fail2banActions"
+demo = "gatewatch.actions.demo:DemoActions"
+
 [tool.setuptools.packages.find]
 include = ["gatewatch*"]

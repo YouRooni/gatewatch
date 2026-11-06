@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -36,7 +37,7 @@ class TelegramChannel:
     async def call(self, method, **params):
         if self.session is None:
             self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=45))
-        if method not in ("getUpdates", "getMe", "getChat", "getChatMember"):
+        if method not in ("getUpdates", "getMe", "getChat", "getChatMember", 'answerCallbackQuery'):
             async with self.lock:
                 await asyncio.sleep(max(0, self.last_request + 3.2 - time.monotonic()))
                 self.last_request = time.monotonic()
@@ -93,6 +94,11 @@ class TelegramChannel:
                           self.config.get("show_node_name", False), self.config.get("time_display", "auto"))
             method = "editMessageText" if receipt else "sendRichMessage" if self.rich else "sendMessage"
             params = dict(chat_id=self.chat, link_preview_options={"is_disabled": True})
+            if card.get('ip'):
+                token = hashlib.sha256(f"{self.id}:{node['id']}:{card['id']}".encode()).hexdigest()[:24]
+                menu = {'node':node['id'],'ip':card['ip'],'topic':topic,'kind':card['kind'],'created':time.time()}
+                self.store.set_state(f'telegram:{self.id}:menu:{token}',menu)
+                params['reply_markup'] = self.keyboard(token,menu,node)
             if self.rich:
                 params["rich_message"] = {"html": body, "skip_entity_detection": True}
             else:
@@ -128,6 +134,101 @@ class TelegramChannel:
                     raise
         raise TelegramError("Delivery retry exhausted")
 
+    def keyboard(self, token, menu, node, pending=None, status=None):
+        ru = self.lang == 'ru'
+        buttons = []
+        blocked = self.store.state(f"blocked:{node['id']}:{menu['ip']}",{}).get('blocked',menu['kind']=='access.ban')
+        action = 'unban' if blocked else 'ban'
+        if action in self.store.control.capabilities(node['id']):
+            if pending:
+                buttons.append({'text':'Выполняется…' if ru else 'Pending…','callback_data':'gw:info:'+pending})
+            else:
+                buttons.append({'text':('Разблокировать' if blocked else 'Блокировать') if ru else ('Unban' if blocked else 'Ban'),
+                                'callback_data':f'gw:{action}:{token}'})
+        muted = node['muted'] > time.time()
+        buttons.append({'text':('Возобновить' if muted else 'Пауза на час') if ru else ('Resume' if muted else 'Mute for 1h'),
+                        'callback_data':f"gw:{'resume' if muted else 'mute'}:{token}"})
+        rows = [buttons]
+        if status:
+            rows.append([{'text':('Готово' if status['ok'] else 'Ошибка · подробнее') if ru else ('Done' if status['ok'] else 'Failed · details'),
+                          'callback_data':'gw:info:'+status['id']}])
+        return {'inline_keyboard':rows}
+
+    async def callback(self, query):
+        ru = self.lang == 'ru'
+        message = query.get('message',{})
+        async def answer(text,alert=False):
+            await self.call('answerCallbackQuery',callback_query_id=query['id'],text=text,show_alert=alert)
+        if query.get('from',{}).get('id') not in self.owners or message.get('chat',{}).get('id') != self.chat:
+            await answer('Нет доступа.' if ru else 'Not authorized.')
+            return
+        data = query.get('data','')
+        info = re.fullmatch('gw:info:([a-f0-9]{32})',data)
+        if info:
+            job = self.store.db.execute('SELECT * FROM actions WHERE id=? AND channel=?',(info[1],self.id)).fetchone()
+            if not job:
+                await answer('Кнопка устарела.' if ru else 'Button expired.')
+            elif not job['result']:
+                await answer('Команда выполняется.' if ru else 'Command pending.')
+            else:
+                result = json.loads(job['result'])
+                translated = {'Protected address':'Адрес защищён от блокировки.','Fail2ban unavailable':'Fail2ban недоступен.',
+                              'Fail2ban rejected action':'Fail2ban отклонил команду.','Fail2ban helper unavailable':'Модуль управления недоступен.',
+                              'Command expired':'Истёк срок команды.','IP blocked':'IP заблокирован.','IP unblocked':'IP разблокирован.',
+                              'Demo: firewall unchanged':'Тест выполнен. Firewall не изменялся.'}
+                await answer(translated.get(result['detail'],result['detail']) if ru else result['detail'],not result['ok'])
+            return
+        match = re.fullmatch('gw:(ban|unban|mute|resume):([a-f0-9]{24})',data)
+        menu = self.store.state(f'telegram:{self.id}:menu:{match[2]}') if match else None
+        if not menu or menu['topic'] != message.get('message_thread_id'):
+            await answer('Кнопка устарела.' if ru else 'Button expired.')
+            return
+        node = self.store.db.execute('SELECT * FROM nodes WHERE id=? AND enabled=1',(menu['node'],)).fetchone()
+        if not node:
+            await answer('Нода отключена.' if ru else 'Node disabled.')
+            return
+        node = dict(node)
+        action,token = match.groups()
+        if action in ('mute','resume'):
+            node['muted'] = time.time()+3600 if action=='mute' else 0
+            with self.store.db:
+                self.store.db.execute('UPDATE nodes SET muted=? WHERE id=?',(node['muted'],node['id']))
+            await answer(('Пауза на час.' if action=='mute' else 'Уведомления включены.') if ru else ('Muted for 1h.' if action=='mute' else 'Notifications resumed.'))
+            markup = self.keyboard(token,menu,node)
+        else:
+            try:
+                job_id = self.store.control.request(node['id'],action,menu['ip'],query['from']['id'],query['id'],self.id,
+                                                    {'message':message['message_id'],'topic':menu['topic'],'menu':token})
+            except ValueError as error:
+                labels = {'Node offline':'Нода не на связи.','Action unavailable':'Управление на ноде не включено.','Action queue busy':'Очередь занята. Попробуй позже.'}
+                await answer(labels.get(str(error),'Команда недоступна.') if ru else str(error),True)
+                return
+            await answer('Команда отправлена.' if ru else 'Command queued.')
+            markup = self.keyboard(token,menu,node,pending=job_id)
+        try:
+            await self.call('editMessageReplyMarkup',chat_id=self.chat,message_id=message['message_id'],reply_markup=markup)
+        except TelegramError as error:
+            if 'message is not modified' not in str(error).lower():
+                raise
+
+    async def action_result(self, job):
+        context,result = json.loads(job['context']),json.loads(job['result'])
+        menu = self.store.state(f"telegram:{self.id}:menu:{context['menu']}")
+        if not menu:
+            return
+        node = self.store.db.execute('SELECT * FROM nodes WHERE id=?',(job['node'],)).fetchone()
+        if not node:
+            return
+        node = dict(node)
+        if result['ok']:
+            self.store.set_state(f"blocked:{job['node']}:{job['ip']}",{'blocked':job['action']=='ban','time':time.time()})
+        try:
+            await self.call('editMessageReplyMarkup',chat_id=self.chat,message_id=context['message'],
+                            reply_markup=self.keyboard(context['menu'],menu,node,status=result))
+        except TelegramError as error:
+            if not any(part in str(error).lower() for part in ('message is not modified','message to edit not found','message_id_invalid','topic_id_invalid')):
+                raise
+
     async def reply(self, message, text):
         params = dict(chat_id=self.chat, text=text, parse_mode="HTML", disable_notification=True, link_preview_options={"is_disabled": True})
         if message.get("message_thread_id"):
@@ -135,6 +236,9 @@ class TelegramChannel:
         return await self.call("sendMessage", **params)
 
     async def update(self, update):
+        if 'callback_query' in update:
+            await self.callback(update['callback_query'])
+            return
         message = update.get("message", {})
         if message.get("chat", {}).get("id") != self.chat:
             return
@@ -192,7 +296,7 @@ class TelegramChannel:
         offset = self.store.state(key, 0)
         while True:
             try:
-                updates = await self.call("getUpdates", offset=offset, timeout=30, allowed_updates=["message"])
+                updates = await self.call("getUpdates", offset=offset, timeout=30, allowed_updates=["message",'callback_query'])
                 for update in updates:
                     await self.update(update)
                     offset = update["update_id"] + 1

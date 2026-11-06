@@ -14,5 +14,6 @@ Gatewatch reports security events. It does not replace SSH hardening, Fail2ban, 
 - Windows file modes do not provide Unix ACL isolation. Use your account's protected workspace for temporary configs.
 - Delivery retries cannot guarantee exactly-once Telegram messages. Network failures after provider acceptance may create duplicates.
 - Local source access can expose system logs. The installer grants journal/adm group access; source plugins are trusted code.
+- Optional actions use a root-owned, socket-activated helper restricted to ban/unban in `sshd`. It checks peer UID and protects configured admin/server addresses. Only configured bot owners can request actions. Revoking a node stops new fetches; an executing command cannot be cancelled retroactively.
 
 Report vulnerabilities privately to `studio.rooni@gmail.com`. Include affected version, reproduction and impact. Do not post real credentials or server addresses in public issues.

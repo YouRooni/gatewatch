@@ -45,6 +45,10 @@ Maximum batch: 100 events. Maximum request body: 128 KiB. An empty batch is a he
 
 ## Acknowledgement
 
+Optional management: nodes advertise `"capabilities": ["ban", "unban"]` in the envelope only with an enabled adapter. `GET /v1/commands?node_id=UUID` with the same Bearer credential waits up to 25 seconds and returns `{"commands": [{"id": "32-hex", "action": "ban", "ip": "203.0.113.42", "expires": 1793977380}]}`. The hub leases commands for 60 seconds. Check expiry before execution and durably cache outcomes by ID.
+
+Include results in a normal event/heartbeat request as `"results": [{"id": "32-hex", "ok": true, "detail": "IP blocked"}]`, at most 20 items. The response acknowledges IDs in `results_accepted`. Retain results until acknowledged. Results are scoped to the authenticated node. Do not expose arbitrary remote shell capabilities.
+
 `200 {"accepted": N}` means the complete batch has been committed to durable storage or recognized as already accepted. It does not mean the notification has reached Telegram. The hub validates the complete batch before committing any event.
 
 - `400`: invalid schema/version/time; repair the batch, do not acknowledge locally.

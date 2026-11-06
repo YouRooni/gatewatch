@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import random
+import re
+import time
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -21,9 +23,11 @@ def validate_endpoint(endpoint):
 
 
 async def run(config):
-    endpoint = validate_endpoint(config["endpoint"]) + "/v1/events"
+    base = validate_endpoint(config["endpoint"])
+    endpoint = base + "/v1/events"
     store = AgentStore(config["database"], config.get("queue_limit", 50000))
     wake = asyncio.Event()
+    actions = plugin('actions',config['actions']['type'])(config['actions']) if config.get('actions') else None
 
     async def collect(source_id, options):
         source = plugin("sources", options["type"])(options)
@@ -46,8 +50,10 @@ async def run(config):
             while True:
                 wake.clear()
                 batch = store.batch()
+                results = store.action_results()
                 try:
-                    async with session.post(endpoint, json={"version": 1, "node_id": config["node_id"], "events": batch},
+                    async with session.post(endpoint, json={"version": 1, "node_id": config["node_id"], "events": batch,
+                                                           'capabilities':actions.capabilities if actions else [],'results':results},
                                             headers={"Authorization": "Bearer " + config["token"]}, allow_redirects=False) as response:
                         if response.status != 200:
                             raise RuntimeError(f"HTTP {response.status}")
@@ -55,8 +61,9 @@ async def run(config):
                         if result.get("accepted") != len(batch):
                             raise RuntimeError("Invalid acknowledgement")
                     store.ack(batch)
+                    store.ack_actions(result.get('results_accepted',[]))
                     delay = 1
-                    if store.has_pending():
+                    if store.has_pending() or (store.action_results() and result.get('results_accepted')):
                         await asyncio.sleep(0.2)
                         continue
                     try:
@@ -69,8 +76,44 @@ async def run(config):
                     await asyncio.sleep(delay + random.uniform(0, delay / 4))
                     delay = min(delay * 2, 60)
 
+    async def receive_commands():
+        delay = 1
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=35)) as session:
+            while True:
+                try:
+                    async with session.get(base+'/v1/commands',params={'node_id':config['node_id']},headers={'Authorization':'Bearer '+config['token']},allow_redirects=False) as response:
+                        if response.status != 200:
+                            raise RuntimeError(f'HTTP {response.status}')
+                        jobs = (await response.json())['commands']
+                    if not isinstance(jobs,list) or len(jobs)>5:
+                        raise ValueError('Invalid commands')
+                    for job in jobs:
+                        if not isinstance(job,dict) or not re.fullmatch('[a-f0-9]{32}',job.get('id','')):
+                            raise ValueError('Invalid command id')
+                        cached = store.action_result(job['id'])
+                        if cached:
+                            outcome = cached
+                        elif job.get('expires',0) <= time.time():
+                            outcome = {'ok':False,'detail':'Command expired'}
+                        else:
+                            try:
+                                outcome = await asyncio.wait_for(actions.execute(job),15)
+                            except Exception:
+                                outcome = {'ok':False,'detail':'Action failed'}
+                        store.save_action(job['id'],outcome)
+                        wake.set()
+                    delay = 1
+                except asyncio.CancelledError:
+                    raise
+                except (aiohttp.ClientError,asyncio.TimeoutError,RuntimeError,ValueError,KeyError) as error:
+                    log.warning('Commands postponed: %s',type(error).__name__)
+                    await asyncio.sleep(delay+random.uniform(0,delay/4))
+                    delay = min(delay*2,60)
+
     tasks = [asyncio.create_task(collect(key, value)) for key, value in config.get("sources", {"journal": {"type": "journal"}}).items()]
     tasks.append(asyncio.create_task(send()))
+    if actions:
+        tasks.append(asyncio.create_task(receive_commands()))
     try:
         await asyncio.gather(*tasks)
     finally:

@@ -77,3 +77,7 @@ Raising an exception leaves the delivery pending. Optionally attach numeric `ret
 Use `store.state(key, default)` and `store.set_state(key, value)` for small JSON state, with keys prefixed by your channel ID. Treat node names and user fields as untrusted strings. Keep channel IDs stable in config to preserve receipts.
 
 Plugin APIs are version 0.1 and may evolve before 1.0. Pin a compatible Gatewatch release in external plugin packages. Plugins run in-process with the service's permissions: install only trusted packages.
+
+## Action adapters
+
+Register `gatewatch.actions` entry points. An adapter accepts config, exposes `capabilities = ["ban", "unban"]`, and implements `async execute(job) -> {"ok": bool, "detail": str}`. Jobs contain `id`, `action`, `ip`, `expires`. Detail is a short non-sensitive status, at most 160 printable characters. Never assemble a shell command from job fields. Keep privileges in a restricted helper. The `demo` adapter performs no firewall operations. Additional action names require a core/protocol extension.

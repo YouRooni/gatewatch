@@ -1,0 +1,24 @@
+[Unit]
+Description=Gatewatch restricted Fail2ban action
+
+[Service]
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/gatewatch-action-helper.py
+StandardInput=socket
+StandardOutput=journal
+StandardError=journal
+User=root
+Group=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+LockPersonality=true
+MemoryMax=64M
+TasksMax=8
+TimeoutStartSec=15

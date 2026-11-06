@@ -21,6 +21,8 @@ def plugin(group, name):
         ("sources", "file"): ("gatewatch.sources.file", "FileSource"),
         ("sources", "demo"): ("gatewatch.sources.demo", "DemoSource"),
         ("channels", "telegram"): ("gatewatch.channels.telegram", "TelegramChannel"),
+        ("actions", "fail2ban"): ("gatewatch.actions.fail2ban", "Fail2banActions"),
+        ("actions", "demo"): ("gatewatch.actions.demo", "DemoActions"),
     }
     if (group, name) in builtins:
         import importlib

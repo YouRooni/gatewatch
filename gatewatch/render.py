@@ -30,6 +30,20 @@ def password_line(card, language):
     return f"<b>{label}:</b> <code>{escape(value if value else '(empty)')}</code>"
 
 
+def password_samples(card):
+    if card.get('passwords'):
+        return card['passwords']
+    return [{'value':card['password'],'count':1}] if card.get('password') is not None else []
+
+
+def sample_line(sample, preview=False):
+    value = json.dumps(sample['value'],ensure_ascii=False)[1:-1].replace('\x7f','\\x7f') or '(empty)'
+    if preview and len(value)>64:
+        value = value[:64]+'…'
+    count = f" · <code>×{sample['count']}</code>" if sample['count']>1 else ''
+    return f'<code>{escape(value)}</code>{count}'
+
+
 def render(node, card, language="ru", timezone="UTC", custom=False, geo="", attribution="", show_node_name=False, time_display="auto"):
     text = TEXT[language]
     kind = card["kind"]
@@ -89,8 +103,15 @@ def render_rich(node, card, language="ru", timezone="UTC", custom=False, geo="",
         users = ", ".join(user or "?" for user in card.get("users", []))
         primary.append(field(text['users'], users))
         primary.append(field(text['method'], card.get('method', '')))
-        if password_line(card, language):
-            primary.append(password_line(card, language))
+        samples = password_samples(card)
+        if samples:
+            primary.append('<b>'+('Пароли:' if ru and len(samples)>1 else 'Пароль:' if ru else 'Passwords:' if len(samples)>1 else 'Password:')+'</b>')
+            primary.extend(sample_line(sample,True) for sample in samples[:3])
+            long_values = any(len(json.dumps(sample['value'],ensure_ascii=False)[1:-1])>64 for sample in samples[:3])
+            extra = samples if long_values else samples[3:]
+            if extra:
+                details.append('<b>'+('Полные пароли:' if ru and long_values else 'Другие пароли:' if ru else 'Full passwords:' if long_values else 'More passwords:')+'</b>')
+                details.extend(sample_line(sample) for sample in extra)
         details.append(field("Сервис" if ru else "Service", card.get('service', 'ssh')))
         if card.get("port"):
             details.append(field(text['port'], card['port']))

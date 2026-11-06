@@ -35,14 +35,41 @@ def create_app(config, store=None):
             if not isinstance(batch, list) or len(batch) > 100:
                 raise ValueError("Batch must contain at most 100 events")
             events = [Event.parse(event) for event in batch]
+            capabilities = data.get('capabilities', [])
+            results = data.get('results', [])
+            if not isinstance(capabilities,list) or len(capabilities)>16 or any(capability not in ('ban','unban') for capability in capabilities):
+                raise ValueError('Invalid capabilities')
+            store.control.validate_results(results)
             store.ingest(data["node_id"], events, subscriptions)
+            accepted_results = store.control.accept(data['node_id'], capabilities, results)
         except (ValueError, TypeError, KeyError):
             raise web.HTTPBadRequest(text="Invalid event batch") from None
         except OverflowError:
             raise web.HTTPServiceUnavailable(text="Queue full", headers={"Retry-After": "30"}) from None
         for event in wake.values():
             event.set()
-        return web.json_response({"accepted": len(events)})
+        response = {"accepted": len(events)}
+        if results:
+            response['results_accepted'] = accepted_results
+        return web.json_response(response)
+
+    async def commands(request):
+        node_id = request.query.get('node_id','')
+        authorization = request.headers.get('Authorization','')
+        if not authorization.startswith('Bearer ') or len(authorization)>200 or not store.authenticate(node_id,authorization[7:]):
+            raise web.HTTPUnauthorized()
+        signal = store.control.signal(node_id)
+        signal.clear()
+        jobs = store.control.fetch(node_id)
+        if not jobs:
+            try:
+                await asyncio.wait_for(signal.wait(),25)
+            except asyncio.TimeoutError:
+                pass
+            if not store.authenticate(node_id,authorization[7:]):
+                raise web.HTTPUnauthorized()
+            jobs = store.control.fetch(node_id)
+        return web.json_response({'commands':jobs})
 
     async def health(request):
         return web.json_response({"status": "ok", "protocol": 1})
@@ -50,10 +77,23 @@ def create_app(config, store=None):
     async def worker(key, channel):
         while True:
             wake[key].clear()
+            job = store.control.due(key)
+            if job:
+                try:
+                    notify = getattr(channel,'action_result',None)
+                    if notify:
+                        await notify(dict(job))
+                    store.control.done(job)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    store.control.failed(job)
+                    log.warning('Action status postponed: %s',type(error).__name__)
             card = store.due(key)
             if not card:
                 try:
-                    await asyncio.wait_for(wake[key].wait(), 15)
+                    deadline = store.next_due(key)
+                    await asyncio.wait_for(wake[key].wait(), min(15,max(0.05,deadline-time.time())) if deadline else 15)
                 except asyncio.TimeoutError:
                     pass
                 continue
@@ -76,6 +116,7 @@ def create_app(config, store=None):
         tick = 0
         while True:
             store.health(subscriptions, config.get("offline_seconds", 180))
+            store.control.cleanup()
             for event in wake.values():
                 event.set()
             if tick % 120 == 0:
@@ -113,6 +154,11 @@ def create_app(config, store=None):
             store.db.close()
 
     app.router.add_post("/v1/events", ingest)
+    app.router.add_get('/v1/commands',commands)
     app.router.add_get("/healthz", health)
+    async def shutdown(app):
+        for signal in store.control.signals.values():
+            signal.set()
+    app.on_shutdown.append(shutdown)
     app.cleanup_ctx.append(lifecycle)
     return app

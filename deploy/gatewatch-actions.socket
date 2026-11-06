@@ -1,0 +1,14 @@
+[Unit]
+Description=Gatewatch privileged action socket
+
+[Socket]
+ListenStream=/run/gatewatch-actions.sock
+SocketUser=gatewatch
+SocketGroup=gatewatch
+SocketMode=0600
+Accept=yes
+MaxConnections=8
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

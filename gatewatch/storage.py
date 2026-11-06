@@ -35,7 +35,7 @@ class HubStore:
             CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, received REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS cards(
                 id TEXT PRIMARY KEY, node TEXT NOT NULL, kind TEXT NOT NULL,
-                payload TEXT NOT NULL, version INTEGER NOT NULL, created REAL NOT NULL);
+                payload TEXT NOT NULL, version INTEGER NOT NULL, created REAL NOT NULL, ip TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS deliveries(
                 card TEXT NOT NULL, channel TEXT NOT NULL, version INTEGER DEFAULT 0,
                 receipt TEXT, next_try REAL DEFAULT 0, failures INTEGER DEFAULT 0,
@@ -60,6 +60,13 @@ class HubStore:
             self.db.execute("ALTER TABLE nodes ADD COLUMN address TEXT NOT NULL DEFAULT ''")
             self.db.commit()
         self.db.execute("CREATE INDEX IF NOT EXISTS deliveries_dirty ON deliveries(dirty,next_try)")
+        if "ip" not in {row[1] for row in self.db.execute("PRAGMA table_info(cards)")}:
+            self.db.execute("ALTER TABLE cards ADD COLUMN ip TEXT NOT NULL DEFAULT ''")
+            self.db.execute("UPDATE cards SET ip=COALESCE(json_extract(payload,'$.ip'),'')")
+            self.db.commit()
+        self.db.execute('CREATE INDEX IF NOT EXISTS cards_flow ON cards(node,ip,kind)')
+        from .control import HubControl
+        self.control = HubControl(self)
 
     def add_node(self, name, address=""):
         node_id, token = str(uuid.uuid4()), secrets.token_urlsafe(32)
@@ -98,6 +105,11 @@ class HubStore:
                 inserted = self.db.execute("INSERT OR IGNORE INTO events VALUES(?,?)", (node_id + ":" + event.id, now)).rowcount
                 if not inserted:
                     continue
+                if event.kind in ('access.ban','access.unban'):
+                    state_key = f'blocked:{node_id}:{event.ip}'
+                    previous = self.state(state_key,{})
+                    if event.time >= previous.get('time',0):
+                        self.db.execute('INSERT OR REPLACE INTO state VALUES(?,?)',(state_key,json.dumps({'blocked':event.kind=='access.ban','time':event.time})))
                 group = hashlib.sha256(json.dumps([event.service, event.ip, int(event.time // self.window)]).encode()).hexdigest()
                 key = f"{node_id}:failure:{group}" if event.kind == "auth.failure" else f"{node_id}:{event.id}"
                 row = self.db.execute("SELECT payload FROM cards WHERE id=?", (key,)).fetchone()
@@ -105,21 +117,32 @@ class HubStore:
                     payload = json.loads(row[0])
                     if event.time >= payload["last"]:
                         payload["password"] = event.password
+                        payload['port'] = event.port
+                        payload['method'] = event.method
                     payload["count"] += 1
                     payload["first"] = min(payload["first"], event.time)
                     payload["last"] = max(payload["last"], event.time)
                     payload["users"] = sorted(set(payload["users"] + [event.user]))[:8]
                 else:
                     payload = {**event.wire(), "count": 1, "first": event.time, "last": event.time, "users": [event.user]}
+                if event.password is not None:
+                    samples = payload.get('passwords', [])
+                    sample = next((sample for sample in samples if sample['value'] == event.password), None)
+                    if sample:
+                        samples.remove(sample)
+                        sample['count'] += 1
+                    else:
+                        sample = {'value':event.password,'count':1}
+                    payload['passwords'] = [sample, *samples][:8]
                 self._card(key, node_id, event.kind, payload, channels, now)
 
     def _card(self, key, node, kind, payload, channels, now):
-        self.db.execute("""INSERT INTO cards VALUES(?,?,?,?,1,?) ON CONFLICT(id) DO UPDATE
-                           SET payload=excluded.payload, version=cards.version+1""", (key, node, kind, json.dumps(payload), now))
+        self.db.execute("""INSERT INTO cards(id,node,kind,payload,version,created,ip) VALUES(?,?,?,?,1,?,?) ON CONFLICT(id) DO UPDATE
+                           SET payload=excluded.payload, version=cards.version+1""", (key, node, kind, json.dumps(payload), now, payload.get('ip','')))
         for channel in channels:
             if isinstance(channels, dict) and kind not in channels[channel]:
                 continue
-            self.db.execute("INSERT OR IGNORE INTO deliveries(card,channel) VALUES(?,?)", (key, channel))
+            self.db.execute("INSERT OR IGNORE INTO deliveries(card,channel,next_try) VALUES(?,?,?)", (key, channel, now+5 if kind=='access.ban' else 0))
         self.db.execute("UPDATE deliveries SET dirty=1 WHERE card=?", (key,))
 
     def health(self, channels, timeout):
@@ -136,7 +159,10 @@ class HubStore:
     def due(self, channel):
         return self.db.execute("""SELECT c.*,d.receipt,d.failures FROM deliveries d JOIN cards c ON c.id=d.card
             JOIN nodes n ON n.id=c.node WHERE d.channel=? AND d.dirty=1 AND d.next_try<=?
-            AND n.enabled=1 ORDER BY CASE WHEN c.kind='auth.failure' THEN 1 ELSE 0 END,c.created LIMIT 1""", (channel, time.time())).fetchone()
+            AND n.enabled=1 AND (c.kind!='access.ban' OR NOT EXISTS (
+                SELECT 1 FROM cards f JOIN deliveries fd ON fd.card=f.id
+                WHERE f.node=c.node AND f.ip=c.ip AND f.kind='auth.failure' AND fd.channel=d.channel AND fd.dirty=1))
+            ORDER BY CASE WHEN c.kind='auth.failure' THEN 1 ELSE 0 END,c.created,c.rowid LIMIT 1""", (channel, time.time())).fetchone()
 
     def done(self, card, channel, receipt):
         with self.db:
@@ -144,11 +170,16 @@ class HubStore:
                 dirty=CASE WHEN (SELECT version FROM cards WHERE id=?)>? THEN 1 ELSE 0 END WHERE card=? AND channel=?""",
                             (card["version"], json.dumps(receipt), time.time() + 15, card["id"], card["version"], card["id"], channel))
 
+    def next_due(self, channel):
+        row = self.db.execute('SELECT MIN(d.next_try) FROM deliveries d JOIN cards c ON c.id=d.card JOIN nodes n ON n.id=c.node WHERE d.channel=? AND d.dirty=1 AND d.next_try>? AND n.enabled=1',(channel,time.time())).fetchone()
+        return row[0] if row else None
+
     def failed(self, card, channel, delay):
         with self.db:
             self.db.execute("UPDATE deliveries SET failures=failures+1,next_try=? WHERE card=? AND channel=?", (time.time() + delay, card["id"], channel))
 
     def cleanup(self):
+        self.control.cleanup()
         cutoff = time.time() - 14 * 86400
         with self.db:
             self.db.execute("DELETE FROM events WHERE received<?", (cutoff,))
@@ -166,6 +197,7 @@ class AgentStore:
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS queue(id TEXT PRIMARY KEY,payload TEXT NOT NULL,created REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS cursors(source TEXT PRIMARY KEY,cursor TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS action_results(id TEXT PRIMARY KEY,result TEXT NOT NULL,acked INTEGER DEFAULT 0,created REAL NOT NULL);
         """)
 
     def cursor(self, source):
@@ -197,3 +229,21 @@ class AgentStore:
     def ack(self, events):
         with self.db:
             self.db.executemany("DELETE FROM queue WHERE id=?", [(e["id"],) for e in events])
+
+    def action_result(self, job_id):
+        row = self.db.execute('SELECT result FROM action_results WHERE id=?',(job_id,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save_action(self, job_id, result):
+        result = {'id':job_id,'ok':bool(result['ok']),'detail':str(result['detail'])[:160]}
+        with self.db:
+            self.db.execute('INSERT OR IGNORE INTO action_results(id,result,created) VALUES(?,?,?)',(job_id,json.dumps(result),time.time()))
+            self.db.execute('UPDATE action_results SET acked=0 WHERE id=?',(job_id,))
+            self.db.execute('DELETE FROM action_results WHERE acked=1 AND created<?',(time.time()-14*86400,))
+
+    def action_results(self):
+        return [json.loads(row[0]) for row in self.db.execute('SELECT result FROM action_results WHERE acked=0 ORDER BY created LIMIT 20')]
+
+    def ack_actions(self, ids):
+        with self.db:
+            self.db.executemany('UPDATE action_results SET acked=1 WHERE id=?',[(job_id,) for job_id in ids])
