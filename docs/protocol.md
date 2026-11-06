@@ -60,28 +60,3 @@ Include results in a normal event/heartbeat request as `"results": [{"id": "32-h
 Deduplication key is `(node_id, event.id)`. Reuse the same ID when retrying. Store events locally before advancing the source cursor. Never follow redirects while sending credentials. Require a trusted HTTPS certificate; loopback HTTP is allowed for local agents/tunnels only.
 
 Acceptance is idempotent within the 14-day retention period. Telegram delivery is at least once: ambiguous network failures may produce duplicate messages. One node key cannot submit events on behalf of another node.
-
-## Example client
-
-```python
-import json
-import time
-import urllib.request
-import uuid
-
-def send(config):
-    event = {
-        "id": str(uuid.uuid4()), "kind": "auth.success",
-        "time": time.time(), "ip": "203.0.113.42",
-        "user": "demo", "method": "publickey"
-    }
-    payload = {"version": 1, "node_id": config["node_id"], "events": [event]}
-    request = urllib.request.Request(
-        config["endpoint"] + "/v1/events",
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json", "Authorization": "Bearer " + config["token"]}
-    )
-    # Illustrative single request; a real client also needs durable storage and redirect refusal.
-    with urllib.request.urlopen(request, timeout=25) as response:
-        return json.load(response)
-```

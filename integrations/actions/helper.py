@@ -28,6 +28,9 @@ def execute(request, policy):
         return {'ok':False,'detail':'Fail2ban client unavailable'}
     except subprocess.TimeoutExpired:
         return {'ok':False,'detail':'Fail2ban timeout'}
+    if process.returncode:
+        output = (process.stderr or process.stdout or b'').decode(errors='replace')[:400]
+        print('Fail2ban command failed: '+output,file=sys.stderr)
     return {'ok':process.returncode == 0,'detail':('IP blocked' if request['action']=='ban' else 'IP unblocked') if process.returncode == 0 else 'Fail2ban rejected action'}
 
 

@@ -1,83 +1,46 @@
 # Extensions
 
-Core flow: source → durable node outbox → HTTP v1 → hub store → channel delivery queue.
+Flow: source → durable outbox → HTTP → hub → channel. Action adapters are optional and independent of log collection.
 
-Source code is independent of notification channels. A channel receives a normalized card and a node record, not raw OS logs. Different channels keep their own delivery version, receipt and retry deadline. A slow/broken channel does not prevent another channel from delivering.
-
-## Source plugin
-
-Register an entry point in your own package:
+Register plugins in your package:
 
 ```toml
 [project.entry-points."gatewatch.sources"]
-my-source = "my_package.source:MySource"
-```
+my-source = "my_package:MySource"
 
-```python
-from gatewatch.model import Event
-
-class MySource:
-    def __init__(self, config):
-        self.config = config
-
-    async def records(self, cursor):
-        async for record in your_stream(after=cursor):
-            event = Event(
-                id=record.stable_id,
-                kind="auth.failure",
-                time=record.unix_time,
-                ip=record.remote_ip,
-                user=record.user,
-                service="your-service"
-            )
-            yield record.cursor, [Event.parse(event.wire())]
-```
-
-`your_stream` is pseudocode. The async iterator yields `(cursor: str, events: list[Event])`. Each batch and cursor are committed atomically by the agent before the next batch. IDs must be stable across rereads. Bound batches to 64 events; wait for I/O instead of busy loops. Raise on transient errors; the runner restarts the source after a delay using the committed cursor. Cancellation must close subprocesses, files and connections.
-
-Configure and install the plugin into the same venv as Gatewatch:
-
-```json
-{"sources": {"my-stable-source-id": {"type": "my-source", "option": "value"}}}
-```
-
-For Android or another runtime, implement [HTTP protocol v1](protocol.md) directly. A separate implementation only needs durable IDs, queueing, heartbeat and HTTPS. It does not need to import Gatewatch or use Python.
-
-## Channel plugin
-
-```toml
 [project.entry-points."gatewatch.channels"]
-my-channel = "my_package.channel:MyChannel"
+my-channel = "my_package:MyChannel"
+
+[project.entry-points."gatewatch.actions"]
+my-actions = "my_package:MyActions"
 ```
 
-```python
-class MyChannel:
-    def __init__(self, config, store, channel_id):
-        self.config = config
-        self.store = store
-        self.channel_id = channel_id
+| Plugin | Contract |
+| --- | --- |
+| Source | `__init__(config)`; async `records(cursor)` yields `(str_cursor, list[Event])` |
+| Channel | `__init__(config, store, channel_id)`; async `deliver(node, card, receipt)` returns a JSON receipt; async `close()` |
+| Actions | `__init__(config)`; `capabilities`; async `execute(job)` returns `{"ok": bool, "detail": str}` |
 
-    async def start(self):
-        pass
+Select the entry-point name with `type` in the corresponding config object. Install the package in Gatewatch's venv.
 
-    async def deliver(self, node, card, receipt):
-        response = await your_api.send_or_update(card, receipt)
-        return {"message_id": response.id}
+## Sources
 
-    async def close(self):
-        pass
-```
+Use stable event IDs across rereads. The agent commits events and cursor together. Bound batches to 64 events, wait for I/O, and close resources on cancellation. Errors restart the source from its committed cursor. Construct events with `gatewatch.model.Event` and validate them with `Event.parse(event.wire())`.
 
-`your_api` is pseudocode. `start` is optional. `deliver` returns a JSON-serializable receipt. The next update to the same card receives that receipt. For an API without edits, choose whether to send a summary or a new notification. Persist only small receipts. Do not log tokens or private payloads.
+Other runtimes, including Android, can implement the [HTTP protocol](protocol.md) without importing Gatewatch.
 
-Raising an exception leaves the delivery pending. Optionally attach numeric `retry` seconds to the exception for provider rate limits. Network timeouts, retry/backoff and output escaping are the channel's responsibility. `close` must stop owned tasks and close clients. The hub runs one worker per channel, so calls to that channel's `deliver` are sequential. Keep polling/background tasks isolated.
+## Channels
 
-`node` contains `id`, `name`, `seen`, `health`, `muted` and `enabled`; credential digests are excluded. `card` contains a normalized event plus `count`, `first`, `last` and `users` for authentication groups. Internal health cards have kinds `node.online` / `node.offline` and omit IP/user fields.
+A card contains normalized event fields plus `count`, `first`, `last`, and `users`. Health cards use `node.online`/`node.offline` and omit IP/user fields. Captured failed passwords may appear as `password` and a bounded `passwords` sample list.
 
-Use `store.state(key, default)` and `store.set_state(key, value)` for small JSON state, with keys prefixed by your channel ID. Treat node names and user fields as untrusted strings. Keep channel IDs stable in config to preserve receipts.
+Receipts are channel-specific. Return a small receipt so later card updates can edit the same notification. Raise on failure; an exception may expose numeric `retry` seconds. Optional async hooks: `start()` and `action_result(job)`. Each channel has a sequential delivery worker.
 
-Plugin APIs are version 0.1 and may evolve before 1.0. Pin a compatible Gatewatch release in external plugin packages. Plugins run in-process with the service's permissions: install only trusted packages.
+Use `store.state(key, default)` and `store.set_state(key, value)` for small JSON state; prefix keys with your channel ID. Keep channel IDs stable in config. Escape user-controlled fields and never log credentials.
 
-## Action adapters
+## Actions
 
-Register `gatewatch.actions` entry points. An adapter accepts config, exposes `capabilities = ["ban", "unban"]`, and implements `async execute(job) -> {"ok": bool, "detail": str}`. Jobs contain `id`, `action`, `ip`, `expires`. Detail is a short non-sensitive status, at most 160 printable characters. Never assemble a shell command from job fields. Keep privileges in a restricted helper. The `demo` adapter performs no firewall operations. Additional action names require a core/protocol extension.
+Jobs contain `id`, `action`, `ip`, `expires`. Core supports `ban` and `unban`; new action names require a protocol extension. Result detail must be a non-sensitive printable string of at most 160 characters.
+
+Do not build shell commands from job fields. Keep privileges in a restricted helper, as the built-in Fail2ban adapter does. The `demo` adapter performs no firewall operations.
+
+Plugin APIs may evolve before 1.0. Pin compatible versions; plugins run with the host service's permissions.

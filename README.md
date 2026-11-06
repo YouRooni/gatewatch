@@ -1,29 +1,12 @@
 # Gatewatch
 
-Server access events, delivered to Telegram topics. Extensible sources and notification channels, with durable queues and per-node keys.
+<a href="README.ru.md"><kbd>Русский</kbd></a>
 
-События доступа к серверам в темах Telegram. Расширяемые источники и каналы уведомлений, очереди на диске и отдельные ключи нод.
+SSH and Fail2ban notifications in Telegram, with a topic per server. Includes persistent queues, optional ban controls, and pluggable sources and channels.
 
-Author: [YouRooni.t.me](https://t.me/YouRooni)
+## Install
 
-## Возможности
-
-- Неудачные входы SSH, баны и разбаны Fail2ban. Успешные входы включаются отдельно.
-- Своя тема для каждого сервера. Переименование сохраняется; удалённая тема создаётся заново при следующей отправке.
-- Повторы с одного IP объединяются в карточку за окно в 5 минут.
-- Кнопки бана/разбана через Fail2ban и пауза уведомлений. Привилегированное управление включается отдельно.
-- События переживают перезапуск и обрыв сети. Ключ ноды можно отозвать или заменить.
-- Агент работает без root. Нет Redis, PostgreSQL и обязательных внешних GeoIP API.
-- Краткие Rich-карточки с раскрываемыми подробностями. Русский и английский, кастомные эмодзи с обычной заменой.
-- Подключаемые источники и каналы через Python entry points. HTTP-протокол не зависит от ОС.
-
-## Установка
-
-Python 3.10+, Linux с systemd для встроенного агента. Автоматическая установка: Debian 12+, Ubuntu 22.04+. Центр и агент можно поставить на одну машину.
-
-### 1. Центр
-
-Создайте бота через BotFather. Добавьте его администратором в группу с темами и правом «Управление темами». Понадобятся ID группы `-100…` и числовой ID владельца бота.
+Debian 12+ or Ubuntu 22.04+, Python 3.10+.
 
 ```sh
 git clone https://github.com/YouRooni/gatewatch.git
@@ -31,68 +14,23 @@ cd gatewatch
 sudo bash scripts/install.sh hub
 ```
 
-Установщик спросит токен без вывода на экран. Конфигурация: `/etc/gatewatch/hub.secret.json`.
+The wizard asks for your bot token, group ID and owner ID. Give the bot permission to manage topics.
 
-Настройте HTTPS перед подключением удалённых нод. Пример для Caddy: [deploy/Caddyfile.example](deploy/Caddyfile.example). Nginx и существующий домен: [docs/operations.md](docs/operations.md). Центр по умолчанию слушает только `127.0.0.1:8787`.
+[Connect nodes and configure HTTPS →](docs/operations.md)
 
-### 2. Нода
+## Controls
 
-На центре:
+`/status` · `/node` · `/mute 1h` · `/unmute`
 
-```sh
-sudo -u gatewatch /opt/gatewatch/bin/gatewatch nodes add 'Node-1' \
-  --address 203.0.113.10 \
-  --endpoint https://watch.example.com \
-  --out /var/lib/gatewatch/node-1.secret.json
-```
+Ban/unban buttons require the optional Fail2ban adapter. Successful sign-ins and password capture are off by default.
 
-Передайте полученный файл на ноду по SSH. На ноде:
+## Development
 
 ```sh
-git clone https://github.com/YouRooni/gatewatch.git
-cd gatewatch
-sudo bash scripts/install.sh agent /path/to/node-1.secret.json
+python -m pip install -e .
+python -m unittest discover -s tests -q
 ```
 
-После проверки удалите передаточную копию файла. Первая связь создаст тему `Node-1 - 203.0.113.10`. Имена нод должны быть короткими; внутренний UUID не меняется при переименовании. Адрес в названии задаёт администратор; это метка сервера, а не адрес последнего подключения.
+[Configuration](docs/operations.md) · [Protocol](docs/protocol.md) · [Extensions](docs/extensions.md) · [Security](SECURITY.md)
 
-### 3. Telegram
-
-Команды доступны только пользователям из `owner_ids`, только в выбранной группе:
-
-| Команда | Действие |
-| --- | --- |
-| `/help` | Короткая справка |
-| `/status` | Состояние серверов |
-| `/node` | Нода текущей темы |
-| `/mute 1h` | Пауза неудачных входов в текущей теме |
-| `/unmute` | Возобновить уведомления |
-
-Пауза не скрывает успешные входы, баны и потерю связи. Закрытая тема не заменяется новой: откройте её, чтобы продолжить доставку. Переименование темы не переименовывает ноду в базе.
-
-## Настройка и расширения
-
-- [Конфигурация, обновление, резервные копии, Fail2ban](docs/operations.md)
-- [HTTP-протокол v1](docs/protocol.md)
-- [Собственный источник или канал](docs/extensions.md)
-- [Границы доверия и сообщения об уязвимостях](SECURITY.md)
-
-Fail2ban устанавливается отдельно; Gatewatch сообщает о его решениях. Если Fail2ban пишет только в файл, подключите файловый источник или отправку его логов в journald. Захват ошибочных паролей выключен по умолчанию и подключается отдельным PAM-модулем. Геоданные необязательны и приблизительны.
-
-Уведомления Telegram ограничены скоростью доставки. При массовой атаке разные IP образуют очередь; успешные входы и блокировки получают приоритет. Доставка как минимум однократная: редкий повтор возможен, если Telegram принял сообщение, а ответ потерялся.
-
-Репозиторий может быть приватным на этапе подготовки: тогда клонирование требует доступа GitHub. Смена видимости не требуется для локальной установки из исходников.
-
-## Разработка
-
-```sh
-python -m venv .venv
-.venv/bin/pip install -e .
-.venv/bin/python -m unittest discover -s tests -v
-```
-
-На Windows используйте `.venv/Scripts/python.exe`. Linux-источники требуют Linux; протокол, центр и тесты работают на Windows.
-
-В изолированном Debian-контейнере с `gcc` и `libpam0g-dev` можно запустить `python scripts/check_pam.py` от root: он проверяет верный/неверный пароль и отказ приёмника, затем удаляет временный PAM-сервис и тестовую учётную запись. Этот сценарий также запускается в CI.
-
-Лицензия MIT.
+MIT · Author: [YouRooni.t.me](https://t.me/YouRooni)

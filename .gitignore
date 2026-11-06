@@ -9,3 +9,4 @@ tmp/
 *.sqlite*
 *.secret.json
 .env
+/agent_diary.md

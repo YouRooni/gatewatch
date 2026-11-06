@@ -1,234 +1,90 @@
-# Эксплуатация
+# Setup
 
-## Конфигурация центра
+## Hub
 
-`gatewatch --config /etc/gatewatch/hub.secret.json check` проверяет конфиг локально. После изменения настроек перезапустите соответствующий сервис.
+Run `sudo bash scripts/install.sh hub` from the repository. The installer creates an unprivileged service, asks for Telegram credentials, and writes `/etc/gatewatch/hub.secret.json`.
 
-| Поле | По умолчанию | Назначение |
-| --- | --- | --- |
-| `listen`, `port` | `127.0.0.1`, `8787` | Адрес HTTP-приёмника |
-| `aggregation_seconds` | `300` | Окно объединения ошибок входа, 30–3600 с |
-| `offline_seconds` | `180` | Порог отсутствия heartbeat |
-| `queue_limit` | `100000` | Порог необработанных доставок |
-| `event_limit` | `1000000` | Порог записей дедупликации |
-| `channels` | Telegram из мастера | Независимые каналы с постоянными ID |
+Use a forum group. The bot needs **Manage Topics** permission; `owner_ids` controls who may use commands and buttons.
 
-Не меняйте ключ `channels.telegram` без необходимости: по нему сохраняются темы, чеки доставки и offset команд. Один бот должен обслуживаться одним центром; webhook или второй `getUpdates` будут конфликтовать.
-
-Конфиг Telegram:
-
-```json
-{
-  "type": "telegram",
-  "token": "BOT_TOKEN",
-  "chat_id": -1001234567890,
-  "owner_ids": [123456789],
-  "language": "ru",
-  "timezone": "Asia/Novosibirsk",
-  "custom_emoji": true
-}
-```
-
-Кастомные эмодзи требуют соответствующих прав аккаунта/бота Telegram. При явном отказе API канал использует обычные эмодзи. Можно сразу установить `custom_emoji: false`. Иконки Toast заданы в `gatewatch/render.py`.
-
-По умолчанию канал отправляет `auth.failure`, `access.ban`, `access.unban`, `node.online`, `node.offline`. Чтобы включить успешные входы, добавьте поле `events` внутрь канала:
-
-```json
-{"events": ["auth.failure", "auth.success", "access.ban", "access.unban", "node.online", "node.offline"]}
-```
-
-Список полностью задаёт подписку канала. События вне подписки принимаются и хранятся центром, но не отправляются. Изменение подписки действует для новых событий; существующие доставки сохраняются. `show_node_name: true` возвращает название сервера в тело сообщения; по умолчанию оно показано только в теме.
-
-`rich_messages: true` включено по умолчанию: краткая карточка и раскрываемые подробности. `false` возвращает обычный Telegram HTML. При недоступном методе API канал автоматически переходит на обычный HTML. Веб-превью отключены.
-
-Время хранится всегда. `time_display: auto` показывает его в подробностях только при задержке больше минуты; у серии попыток есть период. Доступны также `always` и `never`. Свежие одиночные события не дублируют дату Telegram.
-
-## Пароли отказов SSH — отдельная опция
-
-Карточка хранит последние 8 разных захваченных паролей со счётчиками. Первые три видны в цитате, остальные и длинные значения — в подробностях. История ограничена размером и не является полным журналом всех значений.
-
-Штатные журналы SSH не содержат введённого пароля. Если вы намеренно хотите видеть ошибочные пароли в своих уведомлениях:
-
-```sh
-sudo bash scripts/install-pam.sh enable
-```
-
-Опция предназначена для обычной Debian/Ubuntu PAM-авторизации с `pam_unix`. Установщик откажется от нестандартного `common-auth`; MFA/SSSD/LDAP требуют отдельного анализа. Нужен уже включённый `UsePAM yes`. Захват не включает парольную авторизацию, если она запрещена в sshd. Ключи SSH продолжают работать обычным способом.
-
-Модуль на C добавляется только в `/etc/pam.d/sshd`, перед `common-auth`, и всегда возвращает `PAM_IGNORE`. Исходные правила остаются на месте. Он не запускает Python/HTTP/дочерний процесс для каждой попытки: неблокирующая отправка идёт в локальный Unix-сокет. Если агента нет, хук пропускает работу. Исходники: `integrations/pam/`.
-
-Агент принимает секрет только от процесса с UID 0. В памяти хранится не больше 512 записей до 30 секунд. Сопоставление использует PID PAM-процесса/его родителя, логин, IP и время события. Секрет добавляется только к подтверждённому `Failed password`; при успешной или интерактивной авторизации он отбрасывается. Успешный пароль не проходит через очередь, API или БД центра. Очистка временного bytearray выполняется по возможности; Python не гарантирует физическое стирание всех копий из памяти.
-
-Ошибочные пароли будут в локальной очереди до доставки, БД центра и истории Telegram. Среди них может быть ваш настоящий пароль с опечаткой. Используйте эту опцию осознанно. Длиннее 512 байт хук не передаёт. Не-UTF-8 байты отображаются с заменой; управляющие символы показаны как `\n`, `\u0000` и т. п.
-
-Для несуществующих пользователей, а иногда и запрещённых вариантов входа root, OpenSSH передаёт в PAM служебную строку вместо введённого пароля. Gatewatch её отбрасывает; пароль в такой карточке отсутствует. PAM не позволяет восстановить исходный пароль этих попыток. Основа карточки видна в обычной цитате с жирными подписями и моноширинными значениями; под раскрытием остаются сервис, клиентский порт и время при необходимости.
-
-Безопасное отключение:
-
-```sh
-sudo bash scripts/install-pam.sh disable
-```
-
-Перед изменениями установщик сохраняет PAM и конфиг агента в `/var/backups/gatewatch/`. Держите рабочее SSH-подключение до проверки нового входа. Для ручного отката удалите только строку `auth optional /usr/local/lib/security/pam_gatewatch.so` из `/etc/pam.d/sshd`, отключите `password_capture` у journald-источника и перезапустите агент.
-
-## HTTPS через Nginx
-
-Добавьте внутрь существующего HTTPS `server` отдельный маршрут:
+The hub listens on `127.0.0.1:8787`. Put it behind HTTPS. Add these locations to an existing TLS Nginx server, or use [Caddy](../deploy/Caddyfile.example):
 
 ```nginx
 location = /gatewatch/v1/events {
     client_max_body_size 128k;
     proxy_pass http://127.0.0.1:8787/v1/events;
-    proxy_set_header Host $host;
-    proxy_read_timeout 30s;
 }
 location = /gatewatch/v1/commands {
     proxy_pass http://127.0.0.1:8787/v1/commands;
     proxy_read_timeout 35s;
-    proxy_set_header Host $host;
 }
 ```
 
-В конфиге ноды используйте `endpoint: https://example.com/gatewatch`. Проверьте `nginx -t` перед reload. Не публикуйте конфигурационные файлы или SQLite через веб-сервер. Токен ноды передаётся в заголовке, его нельзя добавлять в access log.
+Check `nginx -t` before reloading. Never log Authorization headers.
 
-## Кнопки управления
+## Nodes
 
-У карточек есть «Блокировать / Разблокировать» и «Пауза на час / Возобновить». Нажатия принимаются только от `owner_ids` в заданной группе и соответствующей теме. Кнопки банов появляются только у нод с явно включённым обработчиком:
+On the hub:
+
+```sh
+sudo -u gatewatch /opt/gatewatch/bin/gatewatch nodes add 'Node-1' \
+  --address 203.0.113.10 --endpoint https://example.com/gatewatch \
+  --out /var/lib/gatewatch/node-1.secret.json
+```
+
+Transfer that file to the node over SSH. From a copy of this repository on the node:
+
+```sh
+sudo bash scripts/install.sh agent /path/to/node-1.secret.json
+```
+
+Delete transfer copies after verification. The first heartbeat creates a topic. Renaming it is safe; a deleted topic is recreated on the next delivery.
+
+Manage identities with `nodes list`, `nodes rename UUID NAME`, `nodes address UUID IP`, `nodes revoke UUID`, `nodes remove UUID`, or `nodes rotate UUID --endpoint URL --out FILE`. Run these as `gatewatch` on the hub. Renaming an identity preserves its existing topic name.
+
+## Optional integrations
+
+Fail2ban must already be running. To read its events, set `logtarget = SYSLOG` in `/etc/fail2ban/fail2ban.d/gatewatch.local` and apply `fail2ban-client set logtarget SYSLOG`. Alternatively, use a readable file source: `{"type":"file","path":"/var/log/fail2ban.log"}`. Do not enable both for the same log.
+
+On a node:
 
 ```sh
 sudo bash scripts/install-actions.sh enable
+sudo bash scripts/install-pam.sh enable
 ```
 
-Требуется работающий Fail2ban с jail `sshd`. Отключение: `sudo bash scripts/install-actions.sh disable`. Применяются существующие срок бана и правила jail.
+Use `disable` to undo either integration. Actions are restricted to ban/unban in the existing `sshd` jail and use its ban duration. The root-owned policy `/etc/gatewatch/actions-policy.json` protects server/admin addresses. Update it when your admin IP changes. No root helper remains resident while idle.
 
-Агент остаётся непривилегированным. Root-обработчик запускается через systemd socket activation только по запросу, проверяет UID клиента и принимает исключительно бан/разбан IP для `sshd`, без shell. Постоянного root-процесса для кнопок нет. Владельцем `/usr/local/libexec/gatewatch-action-helper.py`, `/etc/gatewatch/actions-policy.json` и units должен оставаться root.
+PAM capture supports standard Debian/Ubuntu `pam_unix` stacks; custom authentication needs review. It changes only the SSH PAM stack and backs it up first. Keep an SSH session open while checking a new login. Captured failed passwords reach the database and Telegram; successful passwords are discarded. OpenSSH substitutes passwords for invalid users, so those originals are unavailable. See [security](../SECURITY.md).
 
-Установщик защищает от ручного бана loopback, локальные адреса сервера, текущий SSH-адрес администратора и существующие `ignoreip` Fail2ban. Список настраивается root в `/etc/gatewatch/actions-policy.json`. Разбан защищённого адреса разрешён для восстановления доступа. После смены адреса администратора обновите список самостоятельно.
+## Configuration
 
-Команды идут по отдельному HTTPS long-poll, без SSH-ключей на центре. Нода сохраняет результат до подтверждения; повторная доставка использует сохранённый ответ. Сбой между исполнением Fail2ban и записью результата может привести к повторному идемпотентному вызову. Неисполненная команда истекает через 3 минуты. Нажавший владелец, нода, IP и результат хранятся 14 дней. После исполнения кнопка обновляется; «Готово» / «Ошибка» показывает результат при нажатии.
+Restart the service after editing its config. Validate with `gatewatch --config PATH check`.
 
-В Demo можно включить `"actions": {"type": "demo"}`: кнопки проверяют цепочку команд, firewall не изменяется.
+| Hub option | Default |
+| --- | --- |
+| `aggregation_seconds` | `300` |
+| `offline_seconds` | `180` |
+| `queue_limit` | `100000` deliveries |
+| `event_limit` | `1000000` deduplication records |
 
-## Источники
+Telegram channel options: `language` (`ru`/`en`), `timezone`, `custom_emoji`, `events`. Defaults notify failures, bans, unbans and agent connectivity. Add `auth.success` to an explicit `events` list to enable successful sign-ins.
 
-Стандартный агент читает journald через один долгоживущий `journalctl --follow`. Чтение начинается с момента первого запуска; после перезапуска используется сохранённый курсор. Записи фиксируются пакетами до 64 событий или раз в 250 мс. Нужна группа `systemd-journal`, которую добавляет установщик.
+Agent defaults: a journald source, 30-second heartbeat, up to 50,000 queued events for seven days. Full queues apply backpressure; recovery still depends on source log retention. Hub data is retained for 14 days. Failed-password samples are limited to eight distinct values per card.
 
-Источники и их курсоры независимы. Не переименовывайте ключ источника без намеренного сброса позиции.
-
-Fail2ban с journald: настройте `/etc/fail2ban/fail2ban.d/gatewatch.local`:
-
-```ini
-[Definition]
-logtarget = SYSLOG
-```
-
-Перед изменением сохраните прежний конфиг. Для текущего процесса: `fail2ban-client set logtarget SYSLOG`. Это меняет место записи логов, а правила банов сохраняет. Пример в `deploy/fail2ban.local.example`.
-
-Если нужно сохранить файловый лог, добавьте источник в агент:
+For offline geolocation, install `gatewatch[geo]`, run `gatewatch geo-update` as the service user, and set the channel's `geo` object:
 
 ```json
-{
-  "sources": {
-    "journal": {"type": "journal"},
-    "fail2ban-file": {
-      "type": "file",
-      "path": "/var/log/fail2ban.log",
-      "identity": "fail2ban-server",
-      "poll_seconds": 2
-    }
-  }
-}
+{"city_database":"/var/lib/gatewatch/geo/dbip-city.mmdb","asn_database":"/var/lib/gatewatch/geo/dbip-asn.mmdb","attribution":"dbip"}
 ```
 
-Файл должен быть доступен пользователю `gatewatch` после ротации. Установщик добавляет группу `adm`, но файл `root:root 0600` она читать не позволяет. Не включайте оба источника для одних и тех же сообщений Fail2ban: они имеют разные ID и дадут повторы. Файловый источник начинает с конца файла, хранит inode и позицию, поддерживает rename-ротацию и copytruncate с обычным ограничением: данные, потерянные при самой ротации, восстановить невозможно. Источник файла предназначен для Fail2ban; время события берётся в момент чтения.
+DB-IP Lite requires attribution. Update monthly and restart the hub. No lookup requests leave your server.
 
-Gatewatch не включает подробное логирование SSH автоматически. Для отказов `publickey` может потребоваться `LogLevel VERBOSE` в sshd. Сначала проверьте `sshd -t`, затем используйте reload. Строка `Invalid user` отдельно не считается попыткой: последующая `Failed …` уже содержит событие. Сканирование портов без аутентификации сюда не входит.
+## Maintenance
 
-Если journald уже удалил запись курсора, проверьте сообщения источника. Недоступный курсор нельзя превратить в утраченные логи: после резервной копии БД можно удалить только строку соответствующего источника из таблицы `cursors`, чтобы начать с текущего момента. Для восстановления истории экспортируйте доступный журнал и используйте отдельный источник с постоянными ID.
+Logs: `journalctl -u gatewatch-hub -f` or `journalctl -u gatewatch-agent -f`.
 
-## Ресурсы и доставка
+Back up with `sudo -u gatewatch /opt/gatewatch/bin/gatewatch backup /var/lib/gatewatch/snapshot.db`; store the secret config separately. Before upgrades, preserve the database, config and deployed commit. Stop services, install the new checkout with `/opt/gatewatch/bin/pip install /path/to/checkout`, validate configs and restart.
 
-- Heartbeat агента — раз в 30 с, данные отправляются после короткого объединения, до 100 событий за запрос.
-- Нет событий — journald ждёт запись, соединения HTTP переиспользуются.
-- Очередь агента — 50 000 событий; срок хранения до 7 дней с запасом для доставки.
-- При заполнении очереди курсор не продвигается. Агент ждёт освобождения места; восстановление зависит от срока хранения исходных логов.
-- Ошибки сети повторяются с увеличением задержки и случайным разбросом, до 60 с у агента и 15 минут у канала.
-- Telegram: один изменяющий запрос каждые 3,2 с на канал, обновление карточки не чаще 15 с. `retry_after` учитывается.
-- Баны получают приоритет, но ожидают отправки связанных ошибок того же IP. Уведомление о бане задерживается минимум на 5 секунд для поздних SSH-записей. Сама блокировка Fail2ban не откладывается.
-- Дедупликация и доставленные карточки хранятся 14 дней. При достижении лимита центр отвечает 503, агент сохраняет очередь.
-- SQLite использует WAL и синхронную фиксацию. Это снижает риск потери данных при отключении питания ценой операций записи.
-- `MemoryMax` в systemd: центр 192 МБ, агент 96 МБ. Это ограничения, а не заявленное потребление.
+Disable services with `systemctl disable --now gatewatch-agent gatewatch-hub gatewatch-demo`. Remove optional integrations first. Keep data/backups until verified; removal never resets SSH or firewall rules automatically.
 
-Мониторинг связи отражает heartbeat, а не полную работоспособность SSH/Fail2ban. Если сам центр выключен, он не сможет отправить уведомление; внешний uptime-монитор настраивается отдельно. GeoIP увеличивает память; при больших базах скорректируйте MemoryMax.
-
-## GeoIP
-
-IP не передаётся сторонним GeoIP-сервисам. Установите дополнительную зависимость и укажите собственные MMDB-базы:
-
-```sh
-sudo /opt/gatewatch/bin/pip install 'geoip2>=4.8,<6'
-```
-
-```json
-{
-  "geo": {
-    "city_database": "/var/lib/gatewatch/GeoLite2-City.mmdb",
-    "asn_database": "/var/lib/gatewatch/GeoLite2-ASN.mmdb"
-  }
-}
-```
-
-`geo` добавляется внутрь конфигурации канала Telegram. Лицензии и обновление баз зависят от выбранного поставщика. Отсутствующая база не нужна для основной работы. После замены базы перезапустите центр.
-
-Можно скачать бесплатные DB-IP Lite без аккаунта:
-
-```sh
-sudo -u gatewatch /opt/gatewatch/bin/gatewatch geo-update
-```
-
-Укажите пути `/var/lib/gatewatch/geo/dbip-city.mmdb` и `/var/lib/gatewatch/geo/dbip-asn.mmdb`, а также `"attribution": "dbip"` внутри `geo`. Ссылка DB-IP под геоданными обеспечивает указание источника; базы распространяются под CC BY 4.0. Обновления выходят ежемесячно. Если текущий месяц ещё недоступен, укажите `--month YYYY-MM` вручную. Файлы скачиваются с официального сайта, проверяются как MMDB и заменяются атомарно, без загрузки всей базы в RAM.
-
-## Ключи и ноды
-
-Все команды управления запускайте от `gatewatch`, чтобы не создавать SQLite WAL/SHM с владельцем root:
-
-```sh
-sudo -u gatewatch /opt/gatewatch/bin/gatewatch nodes list
-sudo -u gatewatch /opt/gatewatch/bin/gatewatch nodes rename UUID 'New name'
-sudo -u gatewatch /opt/gatewatch/bin/gatewatch nodes address UUID 203.0.113.11
-sudo -u gatewatch /opt/gatewatch/bin/gatewatch nodes revoke UUID
-sudo -u gatewatch /opt/gatewatch/bin/gatewatch nodes rotate UUID \
-  --endpoint https://watch.example.com --out /var/lib/gatewatch/new.secret.json
-sudo -u gatewatch /opt/gatewatch/bin/gatewatch nodes remove UUID
-```
-
-`revoke` сразу запрещает приём новых событий и останавливает оставшуюся доставку этой ноды. `remove` удаляет ноду и очередь центра; история Telegram сохраняется. При ротации старый ключ перестаёт работать сразу, затем нужно заменить конфиг агента и перезапустить его. Удаление ноды не удаляет локальную очередь её агента.
-
-## Тестовая нода
-
-Создайте отдельную ноду `Demo · synthetic`, затем измените её конфиг:
-
-```json
-{
-  "database": "/var/lib/gatewatch/demo.db",
-  "sources": {"demo": {"type": "demo"}}
-}
-```
-
-Остальные поля сохраняются. Запустите `gatewatch --config /path/demo.secret.json run`. Источник один раз создаст три ошибки входа, бан, успешный вход и разбан для документального адреса `203.0.113.42`. Никаких SSH-соединений или firewall-команд источник не выполняет. Для повторного сценария создайте новую тестовую ноду и новый файл БД. Название темы и ноды явно помечайте тестовыми.
-
-## Бекапы и обновления
-
-```sh
-sudo -u gatewatch /opt/gatewatch/bin/gatewatch backup /var/lib/gatewatch/hub-backup.db
-```
-
-Скопируйте снимок и конфиг центра в защищённое хранилище. Токен Telegram — в конфиге; в БД хранятся только хеши ключей нод, но есть история адресов и логинов. Снимок SQLite создаётся через backup API и подходит для работающего центра.
-
-Перед обновлением сохраните БД, конфиги и текущий commit. Остановите роли, установите проверенный commit через `/opt/gatewatch/bin/pip install /path/to/source`, проверьте конфиги и запустите сервисы. Если на машине обе роли, обновляется одно окружение для обеих. Для этой версии схема создаётся через `CREATE TABLE IF NOT EXISTS`; будущие изменения схемы требуют отдельной миграции и release notes.
-
-## Ручная установка и удаление
-
-На другой systemd-системе создайте venv в `/opt/gatewatch`, установите пакет, создайте пользователя `gatewatch`, каталог `/var/lib/gatewatch` с владельцем `gatewatch` и конфиг `root:gatewatch 0640`. Для journald добавьте пользователя в `systemd-journal` или соответствующую группу дистрибутива. Установите подходящий unit из `deploy/` и выполните `systemctl daemon-reload`.
-
-Остановка: `systemctl disable --now gatewatch-agent gatewatch-hub`. Затем можно удалить установленные units и `/opt/gatewatch`. Конфиги и `/var/lib/gatewatch` удаляйте отдельно после бекапа. SSH, firewall, Fail2ban и настройки reverse proxy не удаляются автоматически.
+For a synthetic node, create a separate identity and database, use `"sources":{"demo":{"type":"demo"}}` and optionally `"actions":{"type":"demo"}`. Demo actions do not modify the firewall.
