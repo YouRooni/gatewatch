@@ -16,12 +16,14 @@ class Geo:
         if not address or not ipaddress.ip_address(address).is_global:
             return ""
         if address in self.cache:
-            return self.cache[address]
+            return self.cache[address][0]
         parts = []
+        country = ''
         if self.city:
             from geoip2.errors import AddressNotFoundError
             try:
                 city = self.city.city(address)
+                country = city.country.iso_code or ''
                 parts += [part for part in (city.country.name, city.city.name) if part]
             except AddressNotFoundError:
                 pass
@@ -35,8 +37,12 @@ class Geo:
         result = " · ".join(parts)[:240]
         if len(self.cache) >= 2048:
             self.cache.pop(next(iter(self.cache)))
-        self.cache[address] = result
+        self.cache[address] = (result,country)
         return result
+
+    def country_code(self, address):
+        self.lookup(address)
+        return self.cache.get(address, ('',''))[1]
 
     def close(self):
         for reader in (self.city, self.asn):

@@ -115,6 +115,8 @@ class HubStore:
                 row = self.db.execute("SELECT payload FROM cards WHERE id=?", (key,)).fetchone()
                 if row:
                     payload = json.loads(row[0])
+                    if payload.get('password') is not None and not payload.get('passwords'):
+                        payload['passwords'] = [{'value':payload['password'],'count':1}]
                     if event.time >= payload["last"]:
                         payload["password"] = event.password
                         payload['port'] = event.port
@@ -162,6 +164,10 @@ class HubStore:
             AND n.enabled=1 AND (c.kind!='access.ban' OR NOT EXISTS (
                 SELECT 1 FROM cards f JOIN deliveries fd ON fd.card=f.id
                 WHERE f.node=c.node AND f.ip=c.ip AND f.kind='auth.failure' AND fd.channel=d.channel AND fd.dirty=1))
+            AND (c.kind!='access.unban' OR NOT EXISTS (
+                SELECT 1 FROM cards b JOIN deliveries bd ON bd.card=b.id
+                WHERE b.node=c.node AND b.ip=c.ip AND b.kind='access.ban' AND bd.channel=d.channel AND bd.dirty=1
+                AND (b.created<c.created OR (b.created=c.created AND b.rowid<c.rowid))))
             ORDER BY CASE WHEN c.kind='auth.failure' THEN 1 ELSE 0 END,c.created,c.rowid LIMIT 1""", (channel, time.time())).fetchone()
 
     def done(self, card, channel, receipt):

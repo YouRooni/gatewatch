@@ -91,7 +91,8 @@ class TelegramChannel:
             renderer = render_rich if self.rich else render
             body = renderer(node, card, self.lang, self.config.get("timezone", "UTC"), self.custom,
                           self.geo.lookup(card.get("ip")), self.config.get("geo", {}).get("attribution", ""),
-                          self.config.get("show_node_name", False), self.config.get("time_display", "auto"))
+                          self.config.get("show_node_name", False), self.config.get("time_display", "auto"),
+                          self.geo.country_code(card.get('ip')))
             method = "editMessageText" if receipt else "sendRichMessage" if self.rich else "sendMessage"
             params = dict(chat_id=self.chat, link_preview_options={"is_disabled": True})
             if card.get('ip'):
@@ -173,6 +174,8 @@ class TelegramChannel:
             else:
                 result = json.loads(job['result'])
                 translated = {'Protected address':'Адрес защищён от блокировки.','Fail2ban unavailable':'Fail2ban недоступен.',
+                              'Fail2ban client access denied':'Нет доступа к клиенту Fail2ban.','Fail2ban client unavailable':'Клиент Fail2ban недоступен.',
+                              'Fail2ban timeout':'Fail2ban не ответил вовремя.',
                               'Fail2ban rejected action':'Fail2ban отклонил команду.','Fail2ban helper unavailable':'Модуль управления недоступен.',
                               'Command expired':'Истёк срок команды.','IP blocked':'IP заблокирован.','IP unblocked':'IP разблокирован.',
                               'Demo: firewall unchanged':'Тест выполнен. Firewall не изменялся.'}

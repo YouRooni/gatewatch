@@ -3,6 +3,7 @@ from html import escape
 import json
 import time
 from zoneinfo import ZoneInfo
+from .flags import country_flag
 
 ICONS = {
     "auth.failure": ("5253864872780769235", "❗️"),
@@ -44,7 +45,7 @@ def sample_line(sample, preview=False):
     return f'<code>{escape(value)}</code>{count}'
 
 
-def render(node, card, language="ru", timezone="UTC", custom=False, geo="", attribution="", show_node_name=False, time_display="auto"):
+def render(node, card, language="ru", timezone="UTC", custom=False, geo="", attribution="", show_node_name=False, time_display="auto", country_code=''):
     text = TEXT[language]
     kind = card["kind"]
     icon_id, fallback = ICONS[kind]
@@ -55,7 +56,7 @@ def render(node, card, language="ru", timezone="UTC", custom=False, geo="", attr
     if card.get("ip"):
         lines.append(f"<code>{escape(card['ip'])}</code>")
     if geo:
-        lines.append(escape(geo))
+        lines.append((country_flag(country_code,custom)+' '+escape(geo)).strip())
     if kind.startswith("auth."):
         users = ", ".join(escape(user or "?") for user in card.get("users", []))
         lines += ["", f"{text['users']}: <code>{users}</code>"]
@@ -82,7 +83,7 @@ def render(node, card, language="ru", timezone="UTC", custom=False, geo="", attr
     return "\n".join(lines)
 
 
-def render_rich(node, card, language="ru", timezone="UTC", custom=False, geo="", attribution="", show_node_name=False, time_display="auto"):
+def render_rich(node, card, language="ru", timezone="UTC", custom=False, geo="", attribution="", show_node_name=False, time_display="auto", country_code=''):
     text = TEXT[language]
     kind = card["kind"]
     icon_id, fallback = ICONS[kind]
@@ -94,8 +95,8 @@ def render_rich(node, card, language="ru", timezone="UTC", custom=False, geo="",
     ru = language == "ru"
     primary, details = [], []
 
-    def field(label, value):
-        return f"<b>{escape(label)}:</b> <code>{escape(str(value))}</code>"
+    def field(label, value, prefix=''):
+        return f"<b>{escape(label)}:</b> {prefix}<code>{escape(str(value))}</code>"
 
     if card.get("ip"):
         primary.append(field("IP", card["ip"]))
@@ -122,7 +123,8 @@ def render_rich(node, card, language="ru", timezone="UTC", custom=False, geo="",
         location = ' · '.join(part for part in parts if not part.startswith('AS'))
         network = ' · '.join(part for part in parts if part.startswith('AS'))
         if location:
-            primary.append(field("Локация" if ru else "Location", location))
+            flag = country_flag(country_code,custom)
+            primary.append(field("Локация" if ru else "Location", location,flag+' ' if flag else ''))
         if network:
             primary.append(field("Сеть" if ru else "Network", network))
     if primary:

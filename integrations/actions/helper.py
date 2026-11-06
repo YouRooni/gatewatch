@@ -3,6 +3,7 @@ import json
 import socket
 import struct
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -20,8 +21,13 @@ def execute(request, policy):
     command = ['/usr/bin/fail2ban-client','set','sshd','banip' if request['action']=='ban' else 'unbanip',str(address)]
     try:
         process = subprocess.run(command,capture_output=True,timeout=7)
-    except (OSError,subprocess.TimeoutExpired):
-        return {'ok':False,'detail':'Fail2ban unavailable'}
+    except PermissionError:
+        print('Fail2ban client access denied: check execute/search permissions of its interpreter path',file=sys.stderr)
+        return {'ok':False,'detail':'Fail2ban client access denied'}
+    except OSError:
+        return {'ok':False,'detail':'Fail2ban client unavailable'}
+    except subprocess.TimeoutExpired:
+        return {'ok':False,'detail':'Fail2ban timeout'}
     return {'ok':process.returncode == 0,'detail':('IP blocked' if request['action']=='ban' else 'IP unblocked') if process.returncode == 0 else 'Fail2ban rejected action'}
 
 

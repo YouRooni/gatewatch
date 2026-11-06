@@ -74,6 +74,16 @@ class ActionStoreTest(unittest.TestCase):
             self.store.db.execute('UPDATE deliveries SET next_try=0')
         self.assertEqual(self.store.due('tg')['kind'],'access.ban')
 
+    def test_fast_unban_waits_until_ban_notification(self):
+        self.store.ingest(self.node,[Event.new('access.ban','203.0.113.42'),Event.new('access.unban','203.0.113.42')],['tg'])
+        self.assertIsNone(self.store.due('tg'))
+        with self.store.db:
+            self.store.db.execute('UPDATE deliveries SET next_try=0')
+        card = self.store.due('tg')
+        self.assertEqual(card['kind'],'access.ban')
+        self.store.done(card,'tg',{})
+        self.assertEqual(self.store.due('tg')['kind'],'access.unban')
+
     def test_password_history_counts_distinct_values_and_is_bounded(self):
         timestamp = time.time()
         events = [Event(f'event-password-{i:08d}','auth.failure',timestamp,'203.0.113.42',method='password',password=f'pass-{i}') for i in range(12)]

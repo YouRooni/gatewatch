@@ -183,6 +183,16 @@ class ParsingTest(unittest.TestCase):
         self.assertNotIn("&lt;Main&gt;", body)
         self.assertIn("&lt;Main&gt;", render({"name": "<Main>"}, card, show_node_name=True))
 
+    def test_location_uses_custom_flag_with_unicode_fallback(self):
+        from gatewatch.render import render_rich
+        from gatewatch.flags import country_flag
+        card = {**Event.new('auth.failure','1.1.1.1').wire(),'users':['root'],'count':1,'first':time.time(),'last':time.time()}
+        body = render_rich({'name':'Node'},card,geo='Indonesia · Jakarta · AS4787 Example',country_code='ID',custom=True)
+        self.assertIn('🇮🇩',body)
+        self.assertIn('<b>Локация:</b>',body)
+        self.assertEqual(country_flag('DE'),'🇩🇪')
+        self.assertIn('5305515672741103725',country_flag('DE',True))
+
     def test_secret_files_never_overwrite(self):
         with tempfile.TemporaryDirectory() as temp:
             path = str(Path(temp) / "agent.secret.json")
