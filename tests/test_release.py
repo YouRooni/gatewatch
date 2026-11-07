@@ -17,6 +17,25 @@ from gatewatch.sources.journal import JournalSeekError, JournalSource
 
 
 class ReleaseTest(unittest.TestCase):
+    def test_partial_install_reuses_identical_config(self):
+        with tempfile.TemporaryDirectory() as temp:
+            layout = Layout(Path(temp))
+            layout.config.mkdir(parents=True)
+            source = Path(temp) / "agent.json"
+            source.write_text("{}")
+            manager = Manager(layout, no_start=True)
+            with (
+                patch.object(manager, "provision", return_value=SimpleNamespace(pw_gid=1)),
+                patch.object(manager, "activate"),
+                patch.object(manager, "run", return_value=SimpleNamespace(returncode=1)),
+                patch.object(manager, "build", side_effect=[RuntimeError("temporary failure"), Path(temp)]),
+                patch("gatewatch.installation.os.chown", create=True),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "temporary failure"):
+                    manager.install(Path(temp), "agent", config=source)
+                manager.install(Path(temp), "agent", config=source)
+            self.assertEqual(layout.config_for("agent").read_text(), "{}")
+
     def test_adding_role_keeps_installed_plugin_packages(self):
         with tempfile.TemporaryDirectory() as temp:
             layout = Layout(Path(temp))

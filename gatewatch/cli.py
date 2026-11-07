@@ -43,6 +43,7 @@ def parser():
     emit.add_argument("--id")
     doctor = sub.add_parser("doctor", help="Check local database, plugins and source files")
     doctor.add_argument("--json", action="store_true")
+    doctor.add_argument("--online", action="store_true", help="Probe hub readiness or node authentication")
     sub.add_parser("migrate", help="Apply supported database migrations with a backup")
     legacy = sub.add_parser("prepare-rollback", help=argparse.SUPPRESS)
     legacy.add_argument("--target", required=True)
@@ -124,7 +125,8 @@ def dispatch(args):
         ):
             raise ValueError("Check bot token, negative group ID and positive owner IDs")
         write_secret(args.config, config)
-        print("Hub config created. Set up HTTPS before connecting remote nodes.")
+        print(f"Hub config created. Telegram language: {args.language}. Timezone: {args.timezone}.")
+        print("Set up HTTPS before connecting remote nodes.")
         return
     config = read_config(args.config)
     if args.command == "emit":
@@ -158,9 +160,11 @@ def dispatch(args):
         )
         return
     if args.command == "doctor":
-        from .diagnostics import inspect_config
+        from .diagnostics import inspect_config, inspect_online
 
         result = inspect_config(config)
+        if args.online:
+            result = asyncio.run(inspect_online(config, result))
         if args.json:
             print(json.dumps(result))
         else:

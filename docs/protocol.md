@@ -47,6 +47,10 @@ Maximum batch: 100 events. Maximum request body: 128 KiB. An empty batch is a he
 
 Optional `agent_info` reports `{"version":"1.0.0","sources":{"journal":"ok"}}`; source states are `starting`, `ok` or `error`, up to 16 sources. The hub derives connectivity and source-health notifications from these reports. Such requests receive `protocol` and `hub_version` in the acknowledgement. Legacy clients may omit the field.
 
+An agent with actions can include `agent_info.action_adapter`. Telegram IP controls support `fail2ban` and `demo`. The action payload and result fields remain protocol 1.
+
+An otherwise valid batch containing expired events returns HTTP 400 with `{"error":"events_expired","ids":[...]}`. Agents may remove those IDs from the submitted batch and retry the rest. A generic HTTP 400 does not identify disposable events. An authenticated read-only `GET /v1/probe?node_id=...` checks the identity without recording a heartbeat.
+
 ## Acknowledgement
 
 Optional management: nodes advertise `"capabilities": ["ban", "unban"]` in the envelope only with an enabled adapter. `GET /v1/commands?node_id=UUID` with the same Bearer credential waits up to 25 seconds and returns `{"commands": [{"id": "32-hex", "action": "ban", "ip": "203.0.113.42", "expires": 1793977380}]}`. The hub leases commands for 60 seconds. Check expiry before execution and durably cache outcomes by ID.

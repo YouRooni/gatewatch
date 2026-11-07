@@ -1,5 +1,6 @@
 import asyncio
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -84,6 +85,24 @@ class HTTPTest(unittest.IsolatedAsyncioTestCase):
             headers={"Authorization": "Bearer " + self.token},
         )
         self.assertEqual(response.status, 400)
+
+    async def test_expiration_error_identifies_only_the_expired_event(self):
+        fresh = Event.new("auth.failure", "198.51.100.2").wire()
+        old = {**fresh, "id": "a" * 32, "time": time.time() - 7 * 86400 - 1}
+        response = await self.post([old, fresh])
+        self.assertEqual(response.status, 400)
+        self.assertEqual(await response.json(), {"error": "events_expired", "ids": [old["id"]]})
+        response = await self.post([fresh])
+        self.assertEqual(await response.json(), {"accepted": 1})
+
+    async def test_probe_checks_identity_without_heartbeat(self):
+        response = await self.client.get(
+            "/v1/probe", params={"node_id": self.node}, headers={"Authorization": "Bearer " + self.token}
+        )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.store.db.execute("SELECT seen FROM nodes").fetchone()[0], 0)
+        response = await self.client.get("/readyz")
+        self.assertEqual(await response.json(), {"status": "ready"})
 
     async def test_custom_event_without_ip_is_accepted_and_delivered(self):
         event = Event.new("event", title="Backup complete", service="backup", level="info").wire()

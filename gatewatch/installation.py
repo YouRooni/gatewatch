@@ -686,9 +686,15 @@ class Manager:
         user = self.provision()
         target_config = self.layout.config_for(role)
         if config:
+            content = Path(config).read_bytes()
             if target_config.exists():
-                raise ValueError("Config already exists; refusing to overwrite it")
-            atomic_write(target_config, Path(config).read_bytes(), 0o640)
+                if target_config.read_bytes() != content:
+                    raise ValueError(
+                        "Config already exists with different contents; retry without --config to reuse it"
+                    )
+            else:
+                atomic_write(target_config, content, 0o640)
+            target_config.chmod(0o640)
             os.chown(target_config, 0, user.pw_gid)
         if role != "hub" and not target_config.exists():
             raise ValueError("Agent and demo installation require --config")
@@ -702,6 +708,11 @@ class Manager:
                 if self.run(["getent", "group", group], capture=True, check=False).returncode == 0:
                     self.run(["usermod", "-a", "-G", group, "gatewatch"])
         self.activate(release, [*existing, role], packages, start=[role])
+        print(f"Role: {role}. Config: {target_config}")
+        if role == "hub":
+            print("Configure HTTPS and create an agent identity with gatewatch nodes add.")
+        else:
+            print("Check the agent heartbeat and deliver a test event with gatewatch emit.")
 
     def upgrade(self, source, packages=None):
         roles = self.layout.roles()

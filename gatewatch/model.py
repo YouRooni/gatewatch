@@ -5,6 +5,8 @@ import uuid
 from dataclasses import asdict, dataclass
 
 KINDS = {"auth.failure", "auth.success", "access.ban", "access.unban", "event"}
+EVENT_MAX_AGE = 7 * 86400
+EVENT_FUTURE_SKEW = 300
 
 
 @dataclass(frozen=True)
@@ -26,7 +28,7 @@ class Event:
         return {key: value for key, value in asdict(self).items() if value is not None}
 
     @classmethod
-    def parse(cls, data):
+    def parse(cls, data, *, allow_expired=False, now=None):
         if not isinstance(data, dict) or set(data) - set(cls.__dataclass_fields__):
             raise ValueError("Unknown event fields")
         event = cls(**data)
@@ -34,9 +36,9 @@ class Event:
             raise ValueError("Invalid event id")
         if not isinstance(event.kind, str) or event.kind not in KINDS:
             raise ValueError("Unsupported event kind")
-        if (
-            type(event.time) not in (int, float)
-            or not time.time() - 7 * 86400 <= event.time <= time.time() + 300
+        now = time.time() if now is None else now
+        if type(event.time) not in (int, float) or not (
+            (0 if allow_expired else now - EVENT_MAX_AGE) <= event.time <= now + EVENT_FUTURE_SKEW
         ):
             raise ValueError("Event time outside seven-day window")
         if not isinstance(event.ip, str):

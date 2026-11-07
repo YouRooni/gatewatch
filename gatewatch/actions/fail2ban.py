@@ -16,6 +16,9 @@ class Fail2banActions:
         address = str(ipaddress.ip_address(job["ip"]))
         try:
             reader, writer = await asyncio.wait_for(asyncio.open_unix_connection(self.path), 3)
+        except (OSError, asyncio.TimeoutError):
+            return {"ok": False, "detail": "Fail2ban helper unavailable"}
+        try:
             try:
                 writer.write(json.dumps({"action": action, "ip": address}).encode() + b"\n")
                 await writer.drain()
@@ -28,4 +31,4 @@ class Fail2banActions:
                 writer.close()
                 await writer.wait_closed()
         except (OSError, asyncio.TimeoutError, ValueError):
-            return {"ok": False, "detail": "Fail2ban helper unavailable"}
+            return {"ok": False, "detail": "Action timed out"}

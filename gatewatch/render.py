@@ -60,157 +60,72 @@ def heading(card, text, custom):
     return f"{icon} <b>{escape(card['title'] if kind == 'event' else text[kind])}</b>"
 
 
-def password_line(card, language):
-    if card.get("password") is None:
-        return ""
-    label = (
-        ("Последний пароль" if card.get("count", 1) > 1 else "Пароль")
-        if language == "ru"
-        else ("Last password" if card.get("count", 1) > 1 else "Password")
-    )
-    value = json.dumps(card["password"], ensure_ascii=False)[1:-1].replace("\x7f", "\\x7f")
-    return f"<b>{label}:</b> <code>{escape(value if value else '(empty)')}</code>"
-
-
 def password_samples(card):
     if card.get("passwords"):
         return card["passwords"]
     return [{"value": card["password"], "count": 1}] if card.get("password") is not None else []
 
 
-def sample_line(sample, preview=False):
+def field(label, value, prefix=""):
+    return f"<b>{escape(label)}:</b> {prefix}<code>{escape(str(value))}</code>"
+
+
+def sample_line(sample, limit=None):
     value = json.dumps(sample["value"], ensure_ascii=False)[1:-1].replace("\x7f", "\\x7f") or "(empty)"
-    if preview and len(value) > 64:
-        value = value[:64] + "…"
+    if limit and len(value) > limit:
+        value = value[:limit] + "…"
     count = f" · <code>×{sample['count']}</code>" if sample["count"] > 1 else ""
     return f"<code>{escape(value)}</code>{count}"
 
 
-def render(
-    node,
-    card,
-    language="ru",
-    timezone="UTC",
-    custom=False,
-    geo="",
-    attribution="",
-    show_node_name=False,
-    time_display="auto",
-    country_code="",
-):
+def fields(card, language, timezone, custom, geo, time_display, country_code, rich):
     text = TEXT[language]
-    kind = card["kind"]
-    lines = [heading(card, text, custom)]
-    if show_node_name:
-        lines.append(f"<b>{escape(node['name'])}</b>")
-    if card.get("ip"):
-        lines.append(f"<code>{escape(card['ip'])}</code>")
-    if geo:
-        lines.append((country_flag(country_code, custom) + " " + escape(geo)).strip())
-    if kind == "event":
-        lines.append(
-            f"<b>{'Сервис' if language == 'ru' else 'Service'}:</b> <code>{escape(card['service'])}</code>"
-        )
-        if card.get("detail"):
-            lines.append(f"<blockquote>{escape(card['detail'])}</blockquote>")
-    elif kind.startswith("auth."):
-        users = ", ".join(escape(user or "?") for user in card.get("users", []))
-        lines += ["", f"{text['users']}: <code>{users}</code>"]
-        if card.get("count", 1) > 1:
-            lines.append(f"{text['attempts']}: <b>{card['count']}</b>")
-        lines.append(f"{text['method']}: {escape(card.get('method', ''))}")
-        if password_line(card, language):
-            lines.append(password_line(card, language))
-        if card.get("port"):
-            lines.append(f"{text['port']}: <code>{card['port']}</code>")
-    elif kind.startswith("access."):
-        lines += ["", f"{text['source']}: Fail2ban · {escape(card.get('service', ''))}"]
-    zone = ZoneInfo(timezone)
-    stamp = datetime.fromtimestamp(card["last"], zone).strftime("%d.%m · %H:%M:%S %Z")
-    if card.get("count", 1) > 1:
-        first = datetime.fromtimestamp(card["first"], zone).strftime("%H:%M:%S")
-        stamp += f" · {first}–{datetime.fromtimestamp(card['last'], zone).strftime('%H:%M:%S')}"
-    if time_display == "always" or (time_display == "auto" and time.time() - card["last"] > 60):
-        lines += ["", f"<i>{escape(stamp)}</i>"]
-    elif card.get("count", 1) > 1:
-        lines += ["", f"<i>{first}–{datetime.fromtimestamp(card['last'], zone).strftime('%H:%M:%S')}</i>"]
-    if geo and attribution == "dbip":
-        lines.append('<a href="https://db-ip.com">DB-IP</a>')
-    return "\n".join(lines)
-
-
-def render_rich(
-    node,
-    card,
-    language="ru",
-    timezone="UTC",
-    custom=False,
-    geo="",
-    attribution="",
-    show_node_name=False,
-    time_display="auto",
-    country_code="",
-):
-    text = TEXT[language]
-    kind = card["kind"]
-    count = f" · <code>{card['count']}</code>" if card.get("count", 1) > 1 else ""
-    blocks = [f"<p>{heading(card, text, custom)}{count}</p>"]
-    if show_node_name:
-        blocks.append(f"<p><b>{escape(node['name'])}</b></p>")
     ru = language == "ru"
+    kind = card["kind"]
     primary, details = [], []
-
-    def field(label, value, prefix=""):
-        return f"<b>{escape(label)}:</b> {prefix}<code>{escape(str(value))}</code>"
-
+    service_label = "Сервис" if ru else "Service"
     if card.get("ip"):
         primary.append(field("IP", card["ip"]))
     if card.get("sources"):
         primary.append(field("Источники" if ru else "Sources", ", ".join(card["sources"])))
     if kind == "event":
-        primary.append(field("Сервис" if ru else "Service", card["service"]))
-        if card.get("detail"):
-            primary.append(f"<code>{escape(card['detail'])}</code>")
-    elif kind.startswith("auth."):
-        users = ", ".join(user or "?" for user in card.get("users", []))
-        primary.append(field(text["users"], users))
-        primary.append(field(text["method"], card.get("method", "")))
-        samples = password_samples(card)
-        if samples:
+        primary.append(field(service_label, card["service"]))
+        if card["level"] != "info":
             primary.append(
                 "<b>"
-                + (
-                    "Пароли:"
-                    if ru and len(samples) > 1
-                    else "Пароль:"
-                    if ru
-                    else "Passwords:"
-                    if len(samples) > 1
-                    else "Password:"
-                )
+                + {
+                    "warning": "Предупреждение" if ru else "Warning",
+                    "error": "Ошибка" if ru else "Error",
+                }[card["level"]]
                 + "</b>"
             )
-            primary.extend(sample_line(sample, True) for sample in samples[:3])
-            long_values = any(
-                len(json.dumps(sample["value"], ensure_ascii=False)[1:-1]) > 64 for sample in samples[:3]
+        if card.get("detail"):
+            primary.append(escape(card["detail"]))
+    elif kind.startswith("auth."):
+        users = ", ".join(user or "?" for user in card.get("users", []))
+        if card.get("more_users"):
+            users += " …"
+        primary.append(field(text["users"], users))
+        if card.get("method"):
+            primary.append(field(text["method"], card["method"]))
+        samples = password_samples(card)
+        if samples:
+            primary.append("<b>" + ("Пароль" if ru else "Password") + "</b>")
+            primary.extend(
+                sample_line(sample, 64 if rich or index else 512) for index, sample in enumerate(samples[:3])
             )
-            extra = samples if long_values else samples[3:]
-            if extra:
+            if rich and (
+                len(samples) > 3
+                or any(len(json.dumps(sample["value"], ensure_ascii=False)) > 66 for sample in samples)
+            ):
                 details.append(
-                    "<b>"
-                    + (
-                        "Полные пароли:"
-                        if ru and long_values
-                        else "Другие пароли:"
-                        if ru
-                        else "Full passwords:"
-                        if long_values
-                        else "More passwords:"
-                    )
-                    + "</b>"
+                    "<b>" + ("Все сохранённые пароли" if ru else "All retained passwords") + "</b>"
                 )
-                details.extend(sample_line(sample) for sample in extra)
-        details.append(field("Сервис" if ru else "Service", card.get("service", "ssh")))
+                details.extend(sample_line(sample) for sample in samples)
+            elif not rich and len(samples) > 3:
+                remaining = len(samples) - 3
+                primary.append(f"Ещё {remaining}" if ru else f"{remaining} more")
+        details.append(field(service_label, card.get("service", "ssh")))
         if card.get("port"):
             details.append(field(text["port"], card["port"]))
     elif kind.startswith("access."):
@@ -224,21 +139,51 @@ def render_rich(
             primary.append(field("Локация" if ru else "Location", location, flag + " " if flag else ""))
         if network:
             primary.append(field("Сеть" if ru else "Network", network))
+    zone = ZoneInfo(timezone)
+    last = datetime.fromtimestamp(card["last"], zone)
+    if time_display == "always" or (time_display == "auto" and time.time() - card["last"] > 60):
+        details.append(field("Время события" if ru else "Event time", last.strftime("%d.%m · %H:%M:%S %Z")))
+    if card.get("count", 1) > 1:
+        first = datetime.fromtimestamp(card["first"], zone)
+        fmt = "%H:%M:%S" if first.date() == last.date() else "%d.%m %H:%M:%S"
+        primary.append(field("Период" if ru else "Period", f"{first:{fmt}}–{last:{fmt}} {last:%Z}"))
+    return primary, details
+
+
+def render(
+    node,
+    card,
+    language="ru",
+    timezone="UTC",
+    custom=False,
+    geo="",
+    attribution="",
+    show_node_name=False,
+    time_display="auto",
+    country_code="",
+    *,
+    rich=False,
+):
+    header = heading(card, TEXT[language], custom)
+    if card.get("count", 1) > 1:
+        header += f" · <code>{card['count']}</code>"
+    name = f"<b>{escape(node['name'][:128])}</b>" if show_node_name else ""
+    primary, details = fields(card, language, timezone, custom, geo, time_display, country_code, rich)
+    credit = '<a href="https://db-ip.com">DB-IP</a>' if geo and attribution == "dbip" else ""
+    if not rich:
+        return "\n".join(part for part in (header, name, *primary, *details, credit) if part)
+    blocks = [f"<p>{part}</p>" for part in (header, name) if part]
     if primary:
         blocks.append(f"<blockquote>{'<br>'.join(primary)}</blockquote>")
-    zone = ZoneInfo(timezone)
-    stamp = datetime.fromtimestamp(card["last"], zone).strftime("%d.%m · %H:%M:%S %Z")
-    if time_display == "always" or (time_display == "auto" and time.time() - card["last"] > 60):
-        details.append(field("Время события" if ru else "Event time", stamp))
-    if card.get("count", 1) > 1:
-        first = datetime.fromtimestamp(card["first"], zone).strftime("%H:%M:%S")
-        last = datetime.fromtimestamp(card["last"], zone).strftime("%H:%M:%S")
-        details.append(field("Период" if ru else "Period", f"{first}–{last}"))
     if details:
-        summary = "Подробнее" if ru else "Details"
+        summary = "Подробнее" if language == "ru" else "Details"
         blocks.append(
             f"<details><summary>{summary}</summary><blockquote>{'<br>'.join(details)}</blockquote></details>"
         )
-    if geo and attribution == "dbip":
-        blocks.append('<footer><a href="https://db-ip.com">DB-IP</a></footer>')
+    if credit:
+        blocks.append(f"<footer>{credit}</footer>")
     return "".join(blocks)
+
+
+def render_rich(*args, **kwargs):
+    return render(*args, **kwargs, rich=True)

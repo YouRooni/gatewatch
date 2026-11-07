@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0
+
+- Scope access observations to the node, adapter, jail and IP.
+- Keep command state and result subscribers across restarts.
+- Add IP confirmation, a server panel and paginated Telegram status.
+- Expire stale outbox entries independently of fresh events.
+- Add hub readiness and authenticated node probes.
+- Allow retrying a partial install with its existing config.
+
 ## 1.1.1
 
 - Fix installation with a restrictive umask.

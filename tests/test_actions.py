@@ -167,7 +167,8 @@ class CallbackTest(unittest.IsolatedAsyncioTestCase):
         )
         self.store.set_state(self.channel.topic_key(node), {"id": 11, "name": "Test"})
         self.channel.call = AsyncMock(return_value={"message_id": 5})
-        event = Event.new("auth.failure", "203.0.113.42")
+        event = Event.new("auth.failure", "203.0.113.42", user="root")
+        self.store.ingest(node, [event], ["tg"])
         await self.channel.deliver(
             self.node,
             {**event.wire(), "users": ["root"], "count": 1, "first": event.time, "last": event.time},
@@ -183,11 +184,11 @@ class CallbackTest(unittest.IsolatedAsyncioTestCase):
         self.store.db.close()
         self.temp.cleanup()
 
-    def query(self, user=42, topic=11):
+    def query(self, user=42, topic=11, button=None):
         return {
-            "id": "callback-1",
+            "id": f"callback-{button or self.button}",
             "from": {"id": user},
-            "data": self.button,
+            "data": button or self.button,
             "message": {"chat": {"id": -100123}, "message_id": 5, "message_thread_id": topic},
         }
 
@@ -198,8 +199,22 @@ class CallbackTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_owner_callback_is_durable_and_result_flips_button(self):
         await self.channel.callback(self.query())
+        await self.channel.refresh_task
+        ask = self.channel.call.call_args.kwargs["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+        await self.channel.callback(self.query(button=ask))
+        await self.channel.refresh_task
+        confirm = self.channel.call.call_args.kwargs["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+        self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM actions").fetchone()[0], 0)
+        await self.channel.callback(self.query(button=confirm))
         job = dict(self.store.db.execute("SELECT * FROM actions").fetchone())
         self.assertEqual(job["ip"], "203.0.113.42")
+        self.store.ingest(self.node["id"], [Event.new("auth.failure", job["ip"])], ["tg"])
+        row = self.store.db.execute("SELECT payload FROM cards ORDER BY version DESC LIMIT 1").fetchone()
+        await self.channel.deliver(self.node, json.loads(row[0]), {"message": 5, "topic": 11})
+        self.assertEqual(
+            self.channel.call.call_args.kwargs["reply_markup"]["inline_keyboard"][0][0]["text"],
+            "Выполняется…",
+        )
         self.store.control.accept(
             self.node["id"], ["ban", "unban"], [{"id": job["id"], "ok": True, "detail": "IP blocked"}]
         )
@@ -207,7 +222,9 @@ class CallbackTest(unittest.IsolatedAsyncioTestCase):
         await self.channel.action_result(job)
         button = self.channel.call.call_args.kwargs["reply_markup"]["inline_keyboard"][0][0]
         self.assertEqual(button["text"], "Разблокировать")
-        self.assertTrue(button["callback_data"].startswith("gw:unban:"))
+        self.assertTrue(button["callback_data"].startswith("gw:ask:"))
+        await self.channel.callback(self.query(button=confirm))
+        self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM actions").fetchone()[0], 1)
 
     async def test_other_jail_cannot_offer_ssh_unban(self):
         menu = {
@@ -217,14 +234,57 @@ class CallbackTest(unittest.IsolatedAsyncioTestCase):
             "kind": "access.ban",
             "service": "nginx-http-auth",
         }
-        markup = self.channel.keyboard("a" * 24, menu, self.node)
-        self.assertFalse(
-            any(
-                button["callback_data"].startswith(("gw:ban:", "gw:unban:"))
-                for row in markup["inline_keyboard"]
-                for button in row
-            )
-        )
+        self.assertEqual(self.channel.ip_view("a" * 24, menu, self.node), ("", []))
+
+    async def test_jail_and_ipv6_state_are_independent(self):
+        node = self.node["id"]
+        ip = "2001:db8::42"
+        expanded = "2001:0db8:0:0:0:0:0:0042"
+        self.store.set_state(f"blocked:{node}:{ip}", {"blocked": True, "time": time.time()})
+        self.store.ingest(node, [Event.new("access.ban", ip, service="nginx")], ["tg"])
+        menu = {"node": node, "ip": ip}
+        self.assertEqual(self.channel.ip_state(menu)[2], {})
+        self.store.ingest(node, [Event.new("access.ban", expanded, service="ssh")], ["tg"])
+        self.store.ingest(node, [Event.new("access.unban", ip, service="nginx")], ["tg"])
+        self.assertEqual(self.channel.ip_state(menu)[-1], "unban")
+
+    async def test_subscribers_survive_restart_and_opposite_command_is_rejected(self):
+        node = self.node["id"]
+        ip = "203.0.113.42"
+        control = self.store.control
+        job = control.request(node, "ban", ip, 42, "first", "tg", {"message": 5})
+        self.assertEqual(job, control.request(node, "ban", ip, 43, "second", "other", {"message": 6}))
+        with self.assertRaisesRegex(ValueError, "pending"):
+            control.request(node, "unban", ip, 43, "third", "tg", {"message": 5})
+        reopened = HubStore(str(Path(self.temp.name) / "hub.db"))
+        try:
+            reopened.control.accept(node, ["ban", "unban"], [{"id": job, "ok": True, "detail": "IP blocked"}])
+            for channel, message in (("tg", 5), ("other", 6)):
+                delivery = reopened.control.due(channel)
+                self.assertEqual(json.loads(delivery["subscriber_context"]), {"message": message})
+                reopened.control.done(delivery)
+                self.assertIsNone(reopened.control.due(channel))
+        finally:
+            reopened.db.close()
+
+    async def test_late_result_does_not_override_newer_access_observation(self):
+        node = self.node["id"]
+        ip = "203.0.113.42"
+        control = self.store.control
+        job_id = control.request(node, "ban", ip, 42, "first", "tg", {"message": 5})
+        control.fetch(node)
+        with self.store.db:
+            self.store.db.execute("UPDATE actions SET expires=? WHERE id=?", (time.time() - 1, job_id))
+        control.cleanup()
+        menu = {"node": node, "ip": ip}
+        self.assertEqual(self.channel.ip_state(menu)[3], "unknown")
+        with self.assertRaisesRegex(ValueError, "unconfirmed"):
+            control.request(node, "unban", ip, 42, "second", "tg", {"message": 5})
+        self.store.ingest(node, [Event.new("access.unban", ip, service="sshd")], ["tg"])
+        control.accept(node, ["ban", "unban"], [{"id": job_id, "ok": True, "detail": "IP blocked"}])
+        _, _, access, state, _ = self.channel.ip_state(menu)
+        self.assertEqual(state, "succeeded")
+        self.assertFalse(access["blocked"])
 
 
 class ControlPipelineTest(unittest.IsolatedAsyncioTestCase):

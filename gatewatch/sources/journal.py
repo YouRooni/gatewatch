@@ -68,6 +68,22 @@ class JournalSource:
     def __init__(self, config):
         self.config = config
 
+    async def ready(self):
+        process = await asyncio.create_subprocess_exec(
+            "journalctl",
+            "--lines=0",
+            "--no-pager",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            if await asyncio.wait_for(process.wait(), 5):
+                raise RuntimeError("Journal is unavailable")
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+
     @staticmethod
     def checkpoint(record):
         return json.dumps(

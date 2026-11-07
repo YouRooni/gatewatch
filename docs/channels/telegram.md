@@ -18,7 +18,9 @@ Keep channel IDs stable. They identify delivery receipts and topic bindings.
 
 `/status` · `/node` · `/mute 1h` · `/unmute`
 
-Mute affects failed sign-ins only. Ban/unban buttons require the [Fail2ban adapter](../actions/fail2ban.md). Custom service events have no firewall buttons. Successful sign-ins and [password capture](../integrations/pam.md) are off by default.
+`/status` lists servers and links to their topics. `/node` opens a reusable panel with connection state, delivery backlog and pause controls. A pause suppresses failed sign-in notifications for that server across all channels until the displayed time. Collection, health alerts and bans continue. Suppressed notifications are skipped on resume.
+
+**Manage IP** shows the last observation and asks for confirmation before changing SSH access. A successful command describes the `sshd` jail only. A timeout after dispatch leaves an unconfirmed result until the agent responds or a newer observation resolves it. The [Fail2ban adapter](../actions/fail2ban.md) enables actions. Successful sign-ins and [password capture](../integrations/pam.md) are off by default.
 
 | Option | Default |
 | --- | --- |

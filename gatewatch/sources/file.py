@@ -16,6 +16,10 @@ class FileSource:
         self.interval = max(1, float(config.get("poll_seconds", 2)))
         self.identity = config.get("identity", "fail2ban-server")
 
+    async def ready(self):
+        with open(self.path, "rb"):
+            pass
+
     async def records(self, cursor):
         saved = json.loads(cursor) if cursor else None
         with open(self.path, "rb") as stream:
@@ -70,15 +74,12 @@ class FileSource:
                 if stream.tell() < current_size and not partial:
                     await asyncio.sleep(0)
                     continue
-                try:
-                    current = os.stat(self.path)
-                    if f"{current.st_dev}:{current.st_ino}" != inode:
-                        return
-                    if current.st_size < stream.tell():
-                        stream.seek(0)
-                        generation = str(time.time_ns())
-                        discarding = False
-                        continue
-                except FileNotFoundError:
-                    pass
+                current = os.stat(self.path)
+                if f"{current.st_dev}:{current.st_ino}" != inode:
+                    return
+                if current.st_size < stream.tell():
+                    stream.seek(0)
+                    generation = str(time.time_ns())
+                    discarding = False
+                    continue
                 await asyncio.sleep(self.interval)

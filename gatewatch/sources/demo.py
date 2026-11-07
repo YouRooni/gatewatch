@@ -9,6 +9,9 @@ class DemoSource:
     def __init__(self, config):
         self.config = config
 
+    async def ready(self):
+        pass
+
     async def records(self, cursor):
         if cursor != "complete-v1":
             stamp = time.time()

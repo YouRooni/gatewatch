@@ -33,6 +33,7 @@ jobs:
       - run: python -m pip install --constraint constraints.txt --upgrade pip setuptools wheel
       - run: ruff check gatewatch integrations scripts tests
       - run: ruff format --check gatewatch integrations scripts tests
+      - run: python scripts/check_docs.py
       - run: pip-audit --skip-editable
   linux-install:
     strategy:

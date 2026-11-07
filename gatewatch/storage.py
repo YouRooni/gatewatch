@@ -3,8 +3,12 @@ import json
 import secrets
 import time
 import uuid
+from dataclasses import replace
+from ipaddress import ip_address
 
 from .database import connect, schema, script
+from .model import EVENT_MAX_AGE
+from .targets import ActionTarget
 
 
 def digest(token):
@@ -12,11 +16,12 @@ def digest(token):
 
 
 class HubStore:
-    def __init__(self, path, window=300, max_pending=100000, max_events=1000000):
+    def __init__(self, path, window=300, max_pending=100000, max_events=1000000, offline_seconds=180):
         self.db = connect(path, "hub")
         self.window = window
         self.max_pending = max_pending
         self.max_events = max_events
+        self.offline_seconds = offline_seconds
         with schema(self.db, "hub"):
             script(
                 self.db,
@@ -58,6 +63,9 @@ class HubStore:
                 self.db.execute("ALTER TABLE cards ADD COLUMN ip TEXT NOT NULL DEFAULT ''")
                 self.db.execute("UPDATE cards SET ip=COALESCE(json_extract(payload,'$.ip'),'')")
             self.db.execute("CREATE INDEX IF NOT EXISTS cards_flow ON cards(node,ip,kind)")
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS cards_event ON cards(node,json_extract(payload,'$.id'))"
+            )
             from .control import HubControl
 
             self.control = HubControl(self)
@@ -83,6 +91,32 @@ class HubStore:
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO state VALUES(?,?)", (key, json.dumps(value)))
 
+    def node_status(self, node, now, timeout=None):
+        if not node["seen"]:
+            return "new"
+        if now - node["seen"] > (self.offline_seconds if timeout is None else timeout):
+            return "offline"
+        sources = self.state("agent:" + node["id"], {}).get("sources", {})
+        return "degraded" if "error" in sources.values() else "online"
+
+    def mute(self, node, duration):
+        with self.db:
+            self.db.execute(
+                "UPDATE nodes SET muted=? WHERE id=?", (time.time() + duration if duration else 0, node)
+            )
+
+    def record_access(self, target, blocked, stamp, *, event=False, observed_at=None):
+        previous = self.state(target.key, {})
+        previous_time = previous.get("time", 0)
+        if stamp > previous_time or (event and stamp == previous_time):
+            self.db.execute(
+                "INSERT OR REPLACE INTO state VALUES(?,?)",
+                (
+                    target.key,
+                    json.dumps({"blocked": blocked, "time": stamp, "observed_at": observed_at or stamp}),
+                ),
+            )
+
     def ingest(self, node_id, events, channels):
         now = time.time()
         candidates = {node_id + ":" + event.id for event in events}
@@ -94,8 +128,7 @@ class HubStore:
                 for row in self.db.execute(f"SELECT id FROM events WHERE id IN ({marks})", list(candidates))
             }
         new_count = len(candidates - known)
-        pending = self.db.execute("SELECT COUNT(*) FROM deliveries WHERE dirty=1").fetchone()[0]
-        if pending >= self.max_pending and new_count:
+        if new_count and self.pending_count() >= self.max_pending:
             raise OverflowError("Queue full")
         if (
             new_count
@@ -105,23 +138,20 @@ class HubStore:
             raise OverflowError("Deduplication capacity reached")
         with self.db:
             self.db.execute("UPDATE nodes SET seen=? WHERE id=?", (now, node_id))
+            muted = self.db.execute("SELECT muted FROM nodes WHERE id=?", (node_id,)).fetchone()[0] > now
             for event in events:
                 inserted = self.db.execute(
                     "INSERT OR IGNORE INTO events VALUES(?,?)", (node_id + ":" + event.id, now)
                 ).rowcount
                 if not inserted:
                     continue
+                if muted and event.kind == "auth.failure":
+                    continue
+                if event.ip:
+                    event = replace(event, ip=str(ip_address(event.ip)))
                 if event.kind in ("access.ban", "access.unban"):
-                    state_key = f"blocked:{node_id}:{event.ip}"
-                    previous = self.state(state_key, {})
-                    if event.time >= previous.get("time", 0):
-                        self.db.execute(
-                            "INSERT OR REPLACE INTO state VALUES(?,?)",
-                            (
-                                state_key,
-                                json.dumps({"blocked": event.kind == "access.ban", "time": event.time}),
-                            ),
-                        )
+                    target = ActionTarget.access(node_id, event.service, event.ip)
+                    self.record_access(target, event.kind == "access.ban", event.time, event=True)
                 group = hashlib.sha256(
                     json.dumps([event.service, event.ip, int(event.time // self.window)]).encode()
                 ).hexdigest()
@@ -140,7 +170,10 @@ class HubStore:
                     payload["count"] += 1
                     payload["first"] = min(payload["first"], event.time)
                     payload["last"] = max(payload["last"], event.time)
-                    payload["users"] = sorted(set(payload["users"] + [event.user]))[:8]
+                    users = sorted(set(payload["users"] + [event.user]))
+                    if len(users) > 8:
+                        payload["more_users"] = True
+                    payload["users"] = users[:8]
                 else:
                     payload = {
                         **event.wire(),
@@ -159,6 +192,8 @@ class HubStore:
                         sample = {"value": event.password, "count": 1}
                     payload["passwords"] = [sample, *samples][:8]
                 self._card(key, node_id, event.kind, payload, channels, now)
+            if new_count and self.pending_count() > self.max_pending:
+                raise OverflowError("Queue full")
 
     def _card(self, key, node, kind, payload, channels, now):
         self.db.execute(
@@ -175,21 +210,37 @@ class HubStore:
             )
         self.db.execute("UPDATE deliveries SET dirty=1 WHERE card=?", (key,))
 
+    def pending_count(self):
+        return self.db.execute("SELECT COUNT(*) FROM deliveries WHERE dirty=1").fetchone()[0]
+
+    def card_payload(self, node, event_id):
+        row = self.db.execute(
+            "SELECT payload FROM cards WHERE node=? AND json_extract(payload,'$.id')=?", (node, event_id)
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
     def health(self, channels, timeout):
         now = time.time()
         with self.db:
             for node in self.db.execute("SELECT * FROM nodes WHERE enabled=1 AND seen>0").fetchall():
                 sources = self.state("agent:" + node["id"], {}).get("sources", {})
                 errors = [source for source, status in sources.items() if status == "error"]
-                status = "offline" if now - node["seen"] > timeout else "degraded" if errors else "online"
+                status = self.node_status(node, now, timeout)
                 if status == node["health"]:
                     continue
-                self.db.execute("UPDATE nodes SET health=? WHERE id=?", (status, node["id"]))
                 kind = (
                     "node.recovered"
                     if node["health"] == "degraded" and status == "online"
                     else "node." + status
                 )
+                subscribers = (
+                    sum(kind in events for events in channels.values())
+                    if isinstance(channels, dict)
+                    else len(channels)
+                )
+                if subscribers and self.pending_count() + subscribers > self.max_pending:
+                    continue
+                self.db.execute("UPDATE nodes SET health=? WHERE id=?", (status, node["id"]))
                 payload = {"kind": kind, "first": now, "last": now, "count": 1, "sources": errors}
                 self._card(str(uuid.uuid4()), node["id"], payload["kind"], payload, channels, now)
 
@@ -197,15 +248,17 @@ class HubStore:
         return self.db.execute(
             """SELECT c.*,d.receipt,d.failures FROM deliveries d JOIN cards c ON c.id=d.card
             JOIN nodes n ON n.id=c.node WHERE d.channel=? AND d.dirty=1 AND d.next_try<=?
-            AND n.enabled=1 AND (c.kind!='access.ban' OR NOT EXISTS (
+            AND n.enabled=1 AND (c.kind!='access.ban' OR c.created<=? OR NOT EXISTS (
                 SELECT 1 FROM cards f JOIN deliveries fd ON fd.card=f.id
-                WHERE f.node=c.node AND f.ip=c.ip AND f.kind='auth.failure' AND fd.channel=d.channel AND fd.dirty=1))
+                WHERE f.node=c.node AND f.ip=c.ip AND f.kind='auth.failure' AND fd.channel=d.channel
+                AND fd.version=0 AND json_extract(f.payload,'$.service') IN ('ssh','sshd')
+                AND json_extract(c.payload,'$.service') IN ('ssh','sshd')))
             AND (c.kind!='access.unban' OR NOT EXISTS (
                 SELECT 1 FROM cards b JOIN deliveries bd ON bd.card=b.id
                 WHERE b.node=c.node AND b.ip=c.ip AND b.kind='access.ban' AND bd.channel=d.channel AND bd.dirty=1
                 AND (b.created<c.created OR (b.created=c.created AND b.rowid<c.rowid))))
             ORDER BY CASE WHEN c.kind='auth.failure' THEN 1 ELSE 0 END,c.created,c.rowid LIMIT 1""",
-            (channel, time.time()),
+            (channel, time.time(), time.time() - 30),
         ).fetchone()
 
     def done(self, card, channel, receipt):
@@ -264,6 +317,9 @@ class AgentStore:
                 CREATE TABLE IF NOT EXISTS queue(id TEXT PRIMARY KEY,payload TEXT NOT NULL,created REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS cursors(source TEXT PRIMARY KEY,cursor TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS action_results(id TEXT PRIMARY KEY,result TEXT NOT NULL,acked INTEGER DEFAULT 0,created REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS outbox_losses(reason TEXT PRIMARY KEY,count INTEGER NOT NULL);
+                CREATE INDEX IF NOT EXISTS queue_created ON queue(created);
+                CREATE INDEX IF NOT EXISTS queue_event_time ON queue(json_extract(payload,'$.time'));
             """,
             )
 
@@ -272,8 +328,8 @@ class AgentStore:
         return row[0] if row else None
 
     def append(self, source, cursor, events):
+        self.expire()
         with self.db:
-            self.db.execute("DELETE FROM queue WHERE created<?", (time.time() - 7 * 86400 + 600,))
             if self.db.execute("SELECT COUNT(*) FROM queue").fetchone()[0] + len(events) > self.limit:
                 raise OverflowError("Agent queue full; journal cursor retained")
             for event in events:
@@ -284,15 +340,41 @@ class AgentStore:
             if source is not None:
                 self.db.execute("INSERT OR REPLACE INTO cursors VALUES(?,?)", (source, cursor))
 
-    def batch(self, max_bytes=120 * 1024):
+    def batch(self, max_bytes=120 * 1024, limit=100):
+        self.expire()
         events, size = [], 0
-        for row in self.db.execute("SELECT payload FROM queue ORDER BY created LIMIT 100"):
+        for row in self.db.execute("SELECT payload FROM queue ORDER BY created LIMIT ?", (limit,)):
             length = len(row[0].encode("utf-8")) + 1
             if events and size + length > max_bytes:
                 break
             events.append(json.loads(row[0]))
             size += length
         return events
+
+    def expire(self):
+        cutoff = time.time() - EVENT_MAX_AGE
+        with self.db:
+            count = self.db.execute(
+                "DELETE FROM queue WHERE created<? OR json_extract(payload,'$.time')<?", (cutoff, cutoff)
+            ).rowcount
+            self._record_loss("expired", count)
+
+    def _record_loss(self, reason, count):
+        if count:
+            self.db.execute(
+                "INSERT INTO outbox_losses VALUES(?,?) ON CONFLICT(reason) DO UPDATE SET count=count+excluded.count",
+                (reason, count),
+            )
+
+    def reject_expired(self, ids):
+        with self.db:
+            count = self.db.executemany(
+                "DELETE FROM queue WHERE id=?", [(event_id,) for event_id in ids]
+            ).rowcount
+            self._record_loss("expired_at_hub", count)
+
+    def losses(self):
+        return dict(self.db.execute("SELECT reason,count FROM outbox_losses").fetchall())
 
     def has_pending(self):
         return self.db.execute("SELECT 1 FROM queue LIMIT 1").fetchone() is not None

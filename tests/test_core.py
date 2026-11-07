@@ -3,6 +3,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from gatewatch.agent import validate_endpoint
 from gatewatch.cli import write_secret
@@ -86,6 +87,16 @@ class StoreTest(unittest.TestCase):
         self.assertIsNone(self.store.due("quiet"))
         self.assertIsNotNone(self.store.due("audit"))
 
+    def test_queue_limit_counts_fanout_and_rolls_back_batch(self):
+        self.store.max_pending = 3
+        events = [self.event(), Event.new("auth.success", "198.51.100.2")]
+        with self.assertRaises(OverflowError):
+            self.store.ingest(self.node, events, ["tg", "audit"])
+        self.assertEqual(self.store.pending_count(), 0)
+        self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM events").fetchone()[0], 0)
+        self.store.ingest(self.node, events[:1], ["tg", "audit"])
+        self.assertEqual(self.store.pending_count(), 2)
+
     def test_services_do_not_merge(self):
         self.store.ingest(self.node, [self.event(service="ssh"), self.event(service="vpn")], ["tg"])
         self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM cards").fetchone()[0], 2)
@@ -149,6 +160,20 @@ class StoreTest(unittest.TestCase):
             )
             agent.ack(batch)
             self.assertTrue(agent.has_pending())
+        finally:
+            agent.db.close()
+
+    def test_expired_outbox_head_does_not_delay_fresh_event(self):
+        agent = AgentStore(str(Path(self.temp.name) / "agent.db"))
+        try:
+            now = time.time()
+            old = Event("a" * 32, "auth.failure", now - 7 * 86400 + 30, "198.51.100.1")
+            fresh = self.event()
+            agent.append("journal", "saved", [old, fresh])
+            with patch("gatewatch.storage.time.time", return_value=now + 60):
+                self.assertEqual([event["id"] for event in agent.batch()], [fresh.id])
+            self.assertEqual(agent.cursor("journal"), "saved")
+            self.assertEqual(agent.losses(), {"expired": 1})
         finally:
             agent.db.close()
 

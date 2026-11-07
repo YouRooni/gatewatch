@@ -19,6 +19,7 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install --constraint constraints.txt build twine
       - run: python scripts/build_release.py --tag "$GITHUB_REF_NAME"
-      - run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "Gatewatch ${GITHUB_REF_NAME#v}" --notes-file CHANGELOG.md
+      - run: python scripts/check_docs.py --release-notes "${RUNNER_TEMP}/gatewatch-notes.md"
+      - run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "Gatewatch ${GITHUB_REF_NAME#v}" --notes-file "${RUNNER_TEMP}/gatewatch-notes.md"
         env:
           GH_TOKEN: ${{ github.token }}

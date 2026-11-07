@@ -9,7 +9,7 @@ from aiohttp import web
 
 from . import PROTOCOL_VERSION, __version__
 from .config import DEFAULT_EVENTS
-from .model import Event
+from .model import EVENT_MAX_AGE, Event
 from .plugins import plugin
 from .storage import HubStore
 
@@ -23,6 +23,7 @@ def create_app(config, store=None):
         config.get("queue_limit", 100000),
         config.get("event_limit", 1000000),
     )
+    store.offline_seconds = config.get("offline_seconds", 180)
     channels = {
         key: plugin("channels", options["type"])(options, store, key)
         for key, options in config["channels"].items()
@@ -31,6 +32,7 @@ def create_app(config, store=None):
         key: set(options.get("events", DEFAULT_EVENTS)) for key, options in config["channels"].items()
     }
     wake = {key: asyncio.Event() for key in channels}
+    channel_status = dict.fromkeys(channels, "starting")
     app = web.Application(client_max_size=128 * 1024)
 
     async def ingest(request):
@@ -51,7 +53,8 @@ def create_app(config, store=None):
             batch = data.get("events")
             if not isinstance(batch, list) or len(batch) > 100:
                 raise ValueError("Batch must contain at most 100 events")
-            events = [Event.parse(event) for event in batch]
+            now = time.time()
+            events = [Event.parse(event, allow_expired=True, now=now) for event in batch]
             capabilities = data.get("capabilities", [])
             results = data.get("results", [])
             agent_info = data.get("agent_info")
@@ -63,9 +66,12 @@ def create_app(config, store=None):
                 ):
                     raise ValueError("Invalid agent info")
                 sources = agent_info.get("sources", {})
+                adapter = agent_info.get("action_adapter", "")
                 if (
                     not isinstance(sources, dict)
                     or len(sources) > 16
+                    or not isinstance(adapter, str)
+                    or len(adapter) > 64
                     or any(
                         not isinstance(key, str) or len(key) > 64 or status not in ("ok", "error", "starting")
                         for key, status in sources.items()
@@ -79,16 +85,19 @@ def create_app(config, store=None):
             ):
                 raise ValueError("Invalid capabilities")
             store.control.validate_results(results)
+            expired = [event.id for event in events if event.time < now - EVENT_MAX_AGE]
+            if expired:
+                return web.json_response({"error": "events_expired", "ids": expired}, status=400)
             store.ingest(data["node_id"], events, subscriptions)
-            accepted_results = store.control.accept(data["node_id"], capabilities, results)
             if agent_info is not None:
                 store.set_state("agent:" + data["node_id"], agent_info)
             else:
                 store.set_state("agent:" + data["node_id"], {"version": "legacy", "sources": {}})
+            accepted_results = store.control.accept(data["node_id"], capabilities, results)
         except (ValueError, TypeError, KeyError):
             raise web.HTTPBadRequest(text="Invalid event batch") from None
         except OverflowError:
-            raise web.HTTPServiceUnavailable(text="Queue full", headers={"Retry-After": "30"}) from None
+            return web.json_response({"error": "queue_full"}, status=503, headers={"Retry-After": "30"})
         for event in wake.values():
             event.set()
         response = {"accepted": len(events)}
@@ -126,6 +135,36 @@ def create_app(config, store=None):
             {"status": "ok", "protocol": PROTOCOL_VERSION, "version": __version__, "schema": 1}
         )
 
+    async def readiness(request):
+        pending = store.pending_count()
+        ready = pending < store.max_pending and all(
+            channel_status[key] == "ready" and getattr(channel, "poll_healthy", True)
+            for key, channel in channels.items()
+        )
+        return web.json_response({"status": "ready" if ready else "degraded"}, status=200 if ready else 503)
+
+    async def probe(request):
+        authorization = request.headers.get("Authorization", "")
+        if (
+            not authorization.startswith("Bearer ")
+            or len(authorization) > 300
+            or not store.authenticate(request.query.get("node_id", ""), authorization[7:])
+        ):
+            raise web.HTTPUnauthorized()
+        return web.json_response({"protocol": PROTOCOL_VERSION})
+
+    def delivery_error(error):
+        code = getattr(error, "code", None)
+        if code == 401:
+            return "credentials"
+        if code == 403:
+            return "permissions"
+        if code == 429:
+            return "rate_limited"
+        if code == 400:
+            return "request_rejected"
+        return "unavailable"
+
     async def worker(key, channel):
         while True:
             wake[key].clear()
@@ -139,8 +178,11 @@ def create_app(config, store=None):
                 except asyncio.CancelledError:
                     raise
                 except Exception as error:
-                    store.control.failed(job)
-                    log.warning("Action status postponed: %s", type(error).__name__)
+                    store.control.failed(job, max(30, getattr(error, "retry", 0)))
+                    channel_status[key] = delivery_error(error)
+                    log.warning("Channel %s action status postponed: %s", key, channel_status[key])
+                if not store.due(key) and store.control.due(key):
+                    continue
             card = store.due(key)
             if not card:
                 try:
@@ -162,13 +204,15 @@ def create_app(config, store=None):
                         json.loads(card["payload"]),
                         json.loads(card["receipt"]) if card["receipt"] else None,
                     )
+                    channel_status[key] = "ready"
                 store.done(card, key, receipt)
             except asyncio.CancelledError:
                 raise
             except Exception as error:
                 delay = max(getattr(error, "retry", 0), min(2 ** min(card["failures"] + 1, 10), 900))
                 store.failed(card, key, delay + random.uniform(0, 3))
-                log.warning("Channel %s delivery postponed: %s", key, type(error).__name__)
+                channel_status[key] = delivery_error(error)
+                log.warning("Channel %s delivery postponed: %s", key, channel_status[key])
 
     async def maintain():
         tick = 0
@@ -191,12 +235,16 @@ def create_app(config, store=None):
                     start = getattr(channel, "start", None)
                     if start:
                         await start()
+                    channel_status[key] = "ready"
                     break
                 except asyncio.CancelledError:
                     raise
                 except Exception as error:
-                    log.warning("Channel %s not ready: %s", key, type(error).__name__)
-                    await asyncio.sleep(30)
+                    channel_status[key] = (
+                        "permissions" if isinstance(error, PermissionError) else delivery_error(error)
+                    )
+                    log.warning("Channel %s not ready: %s", key, channel_status[key])
+                    await asyncio.sleep(max(30, getattr(error, "retry", 0)))
             await worker(key, channel)
 
         try:
@@ -214,6 +262,8 @@ def create_app(config, store=None):
     app.router.add_post("/v1/events", ingest)
     app.router.add_get("/v1/commands", commands)
     app.router.add_get("/healthz", health)
+    app.router.add_get("/readyz", readiness)
+    app.router.add_get("/v1/probe", probe)
 
     async def shutdown(app):
         for signal in store.control.signals.values():

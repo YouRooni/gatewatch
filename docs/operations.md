@@ -17,6 +17,9 @@ location = /gatewatch/v1/commands {
     proxy_pass http://127.0.0.1:8787/v1/commands;
     proxy_read_timeout 35s;
 }
+location = /gatewatch/v1/probe {
+    proxy_pass http://127.0.0.1:8787/v1/probe;
+}
 ```
 
 Check `nginx -t` before reloading. Never log Authorization headers.
@@ -39,6 +42,13 @@ sudo bash scripts/install.sh agent /path/to/node-1.secret.json
 
 Delete transfer copies after verification. The first heartbeat creates a topic. Renaming it is safe; a deleted topic is recreated on the next delivery.
 
+Check `/status` in Telegram, then queue a test event on the agent. It should appear in the server topic.
+
+```sh
+sudo -u gatewatch /opt/gatewatch/bin/gatewatch --config /etc/gatewatch/agent.secret.json doctor --online
+sudo -u gatewatch /opt/gatewatch/bin/gatewatch --config /etc/gatewatch/agent.secret.json emit 'Gatewatch test' --service setup
+```
+
 Manage identities with `nodes list`, `nodes rename UUID NAME`, `nodes address UUID IP`, `nodes revoke UUID`, `nodes remove UUID`, or `nodes rotate UUID --endpoint URL --out FILE`. Run these as `gatewatch` on the hub. Renaming an identity preserves its existing topic name.
 
 ## Optional integrations
@@ -56,13 +66,15 @@ Restart the service after editing its config. Validate with `gatewatch --config 
 | `queue_limit` | `100000` deliveries |
 | `event_limit` | `1000000` deduplication records |
 
-Agent defaults: a journald source, 30-second heartbeat, up to 50,000 queued events for seven days. Full queues apply backpressure; recovery still depends on source log retention. Hub data is retained for 14 days. Failed-password samples are limited to eight distinct values per card.
+Agent defaults include a journald source, a 30-second heartbeat and a 50,000-event outbox. Events expire seven days after the event or enqueue time, whichever comes first. The hub accepts up to five minutes of future clock skew. Full queues apply backpressure and recovery depends on source log retention. Deduplication records and fully delivered hub cards are eligible for cleanup after 14 days. Pending cards stay queued. Failed-password samples are limited to eight distinct values per card.
 
 ## Maintenance
 
 Logs: `journalctl -u gatewatch-hub -f` or `journalctl -u gatewatch-agent -f`.
 
 Back up with `sudo -u gatewatch /opt/gatewatch/bin/gatewatch backup /var/lib/gatewatch/snapshot.db`; store the secret config separately. Use the [versioned update manager](releases.md) for upgrades and rollback. `gatewatch doctor` checks local database and plugin readiness without sending messages.
+
+`/healthz` reports that the hub process is responding. `/readyz` checks the delivery queue and channel readiness. `doctor --online` probes readiness on the hub and authenticates the configured identity on the agent without sending an event. Local doctor output includes backlog age and expired outbox counts. A Telegram timeout after accepting a send can cause a duplicate on retry.
 
 Remove services with `sudo /opt/gatewatch/bin/gatewatch-manage uninstall all`. Configs and data are retained; removal never resets firewall rules.
 

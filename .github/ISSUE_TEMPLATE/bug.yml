@@ -1,0 +1,16 @@
+name: Bug report
+description: Report a reproducible Gatewatch problem.
+body:
+  - type: input
+    id: environment
+    attributes:
+      label: Hub and agent versions, OS and adapters
+    validations:
+      required: true
+  - type: textarea
+    id: scenario
+    attributes:
+      label: Steps, expected result and observed result
+      description: Use synthetic data. Omit tokens, secret configs, passwords and private chat details.
+    validations:
+      required: true

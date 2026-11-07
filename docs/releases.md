@@ -11,7 +11,7 @@ Release bundles include a standalone installer, source, wheel, metadata and `SHA
 ```sh
 sha256sum --check SHA256SUMS.txt
 sudo python3 gatewatch-install.py install agent \
-  --bundle gatewatch-1.0.0-bundle.tar.gz --config agent.secret.json
+  --bundle gatewatch-1.2.0-bundle.tar.gz --config agent.secret.json
 ```
 
 ## Update
@@ -22,11 +22,13 @@ Custom service events require hub 1.1+. Rollback to 1.0 is rejected if the datab
 
 ```sh
 sudo /opt/gatewatch/bin/gatewatch-manage status
-sudo /opt/gatewatch/bin/gatewatch-manage upgrade --version 1.0.0
-sudo -u gatewatch /opt/gatewatch/bin/gatewatch doctor
+sudo /opt/gatewatch/bin/gatewatch-manage upgrade --version 1.2.0
+sudo -u gatewatch /opt/gatewatch/bin/gatewatch doctor --online
 ```
 
 Choose an exact release, or explicitly use `--version latest`. Private repository downloads require `GH_TOKEN` and `sudo --preserve-env=GH_TOKEN`. The token is not saved. Offline source delivery uses `upgrade --bundle FILE` with its checksum file, or `upgrade --source /path/to/tagged/checkout`.
+
+Check the agent heartbeat in `/status` and deliver a synthetic event after upgrading. If an install created the config but failed before activation, fix the reported error and retry the same command. An identical config is reused. To keep an edited config, retry without `--config`.
 
 Environments live in `/opt/gatewatch-releases`; `/opt/gatewatch` points to the active one. Updates retain configs, topics, node tokens and queued data. Configs, consistent database snapshots and integration files are backed up under `/var/backups/gatewatch` before activation. Keep an off-server backup too.
 

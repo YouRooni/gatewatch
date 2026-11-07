@@ -132,7 +132,7 @@ class TelegramTest(unittest.IsolatedAsyncioTestCase):
         self.channel.reply.assert_not_awaited()
 
     async def test_owner_mute_is_scoped_to_topic(self):
-        self.channel.reply = AsyncMock()
+        self.channel.call = AsyncMock(return_value={"message_id": 42})
         await self.channel.update(
             {
                 "message": {
@@ -144,3 +144,24 @@ class TelegramTest(unittest.IsolatedAsyncioTestCase):
             }
         )
         self.assertGreater(self.store.db.execute("SELECT muted FROM nodes").fetchone()[0], 0)
+        self.assertIn("во всех каналах до", self.channel.call.call_args.kwargs["text"])
+
+    async def test_bot_mentions_route_to_own_username_only(self):
+        self.channel.username = "ownbot"
+        self.channel.call = AsyncMock(return_value={"message_id": 42})
+        message = {"chat": {"id": -100123}, "from": {"id": 42}, "message_thread_id": 11}
+        await self.channel.update({"message": {**message, "text": "/mute@AnotherBot 1h"}})
+        self.assertEqual(self.store.db.execute("SELECT muted FROM nodes").fetchone()[0], 0)
+        self.channel.call.assert_not_awaited()
+        await self.channel.update({"message": {**message, "text": "/mute@OwnBot 1h"}})
+        self.assertGreater(self.store.db.execute("SELECT muted FROM nodes").fetchone()[0], 0)
+
+    async def test_status_has_all_pages(self):
+        self.channel.call = AsyncMock(return_value={"message_id": 42})
+        for index in range(99):
+            self.store.add_node(f"Server {index:02}")
+        await self.channel.show_status({})
+        self.assertIn("1/7", self.channel.call.call_args.kwargs["text"])
+        await self.channel.show_status({"message_id": 42}, page=6, edit=True)
+        self.assertIn("Server 98", self.channel.call.call_args.kwargs["text"])
+        self.assertIn("7/7", self.channel.call.call_args.kwargs["text"])
